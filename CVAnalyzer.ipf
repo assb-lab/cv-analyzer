@@ -292,7 +292,8 @@ End
 
 Function CVA_CycleEnd(cycle_number,start)
     Wave cycle_number
-    Variable start,finish=start,n=numpnts(cycle_number)
+    Variable start
+    Variable finish=start,n=numpnts(cycle_number)
     do
         if (finish+1>=n)
             break
