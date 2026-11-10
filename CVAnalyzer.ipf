@@ -1054,9 +1054,10 @@ End
 // Italic voltage symbol, upright subscript and unit.
 Function/S CVA_FitLabel(side,voltage)
     Variable side,voltage
-    String subscript="ox."
+    String subscript="ox.",formattedVoltage
     if(side==2)
         subscript="red."
     endif
-    return "\\Z14\\f02V\\f00\\B"+subscript+"\\M\\Z14 = "+num2str(voltage)+" V"
+    sprintf formattedVoltage, "%.3f", voltage
+    return "\\Z14\\f02V\\f00\\B"+subscript+"\\M\\Z14 = "+formattedVoltage+" V"
 End
