@@ -1,6 +1,6 @@
 #pragma rtGlobals=3
-#pragma version=0.101
-// Semantic version: 0.1.1 (Igor pragma uses a numeric version).
+#pragma version=0.102
+// Semantic version: 0.1.2 (Igor pragma uses a numeric version).
 
 // BioLogic EC-Lab cyclic voltammetry viewer. Igor Pro 8 or later.
 Menu "Macros"
@@ -18,7 +18,7 @@ Function CVA_OpenPanel()
     NewPanel/N=CVA_Panel/W=(20,50,385,595) as "CV Analyzer"
     TitleBox heading,pos={20,15},size={325,30},frame=0,title="CV Analyzer"
     TitleBox heading,fSize=20,fStyle=1,fColor=(6500,14000,29000)
-    TitleBox version,pos={286,23},frame=0,title="v0.1.1",fSize=11,fColor=(24000,27000,32000)
+    TitleBox version,pos={286,23},frame=0,title="v0.1.2",fSize=11,fColor=(24000,27000,32000)
     TitleBox subtitle,pos={20,48},size={325,20},frame=0,title="BioLogic EC-Lab  •  サイクリックボルタンメトリー"
     TitleBox subtitle,fSize=11,fColor=(24000,27000,32000)
     GroupBox inputGroup,pos={15,78},size={335,130},title="1  測定方法とファイル",fSize=12,fStyle=1
@@ -703,7 +703,7 @@ Function CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
     Variable initialCycle,initialSide
     Variable i
     ControlBar/W=$graph 232
-    TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D を同じ走査枝に配置し、2 本の直線をフィットします。",fSize=11
+    TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D をそれぞれ 1 つの走査枝に配置します。",fSize=11
     TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="結果は選択範囲に依存します。酸化・還元は手動で選択します。",fSize=11
     String cycleMenu=""
     for(i=0;i<numpnts(allCycles);i+=1)
@@ -739,8 +739,7 @@ Function CVA_PlaceFitBelow(sourceGraph,fitGraph)
     MoveWindow/W=$fitGraph left,top,left+width,top+height
 End
 
-// Conservative branch check: no reversal of measured potential anywhere
-// between the first and last selected points; flat steps are allowed.
+// A single fitting interval must not reverse potential; flat steps are allowed.
 Function CVA_FitSameBranch(x,lo,hi)
     Wave x
     Variable lo,hi
@@ -766,6 +765,13 @@ Function CVA_FitSameBranch(x,lo,hi)
         endif
     endfor
     return direction!=0
+End
+
+// Each interval must stay on one branch; the two branches may differ.
+Function CVA_FitRangesOnBranches(x,a,b,c,d)
+    Wave x
+    Variable a,b,c,d
+    return CVA_FitSameBranch(x,a,b) && CVA_FitSameBranch(x,c,d)
 End
 
 Function CVA_FitHook(s)
@@ -973,8 +979,8 @@ Function CVA_CalculateFit(x,y,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)
         DoAlert 0,"カーソル範囲がデータの外にあります。"
         return -1
     endif
-    if(!CVA_FitSameBranch(x,min(a,c),max(b,d)))
-        DoAlert 0,"2つの範囲の間に電位の反転があります。同じ走査枝を選択してください。測定ノイズによる微小反転も拒否します。"
+    if(!CVA_FitRangesOnBranches(x,a,b,c,d))
+        DoAlert 0,"A–B または C–D の範囲内に電位の反転があるか、電位が一定です。各範囲をそれぞれ 1 つの走査枝に配置してください。"
         return -1
     endif
     if(CVA_FitLine(x,y,a,b,m1,b1)!=0 || CVA_FitLine(x,y,c,d,m2,b2)!=0)

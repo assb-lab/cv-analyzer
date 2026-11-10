@@ -19,6 +19,7 @@ Function CVAT_Run()
     NewDataFolder/S $folder
     String testDF=GetDataFolder(1)
     CVAT_Math()
+    CVAT_CrossBranch()
     CVAT_DataRows()
     CVAT_Charge(testDF)
     CVAT_State(testDF)
@@ -89,6 +90,22 @@ Function CVAT_Math()
     x=p/10; x[4]=NaN
     CVAT_Assert(!CVA_FitSameBranch(x,0,11),"nonfinite potential rejected")
     CVAT_Assert(CVA_FitLine(x,y,0,11,m,b)!=0,"nonfinite OLS input rejected")
+End
+
+// Two intervals may use opposite branches, but neither interval may turn.
+Function CVAT_CrossBranch()
+    Make/FREE/D/N=12 x={0,0.2,0.4,0.6,0.8,1,0.8,0.6,0.4,0.2,0,-0.2},y
+    y=(p<=5) ? 2*x+1 : 4*x-0.5
+    Variable m1,b1,m2,b2,xe,ye,extrap
+    CVAT_Assert(CVA_FitRangesOnBranches(x,0,3,7,10),"opposite branches accepted")
+    CVAT_Assert(!CVA_FitRangesOnBranches(x,3,7,8,10),"first interval crossing turn rejected")
+    CVAT_Assert(!CVA_FitRangesOnBranches(x,0,3,3,7),"second interval crossing turn rejected")
+    CVAT_Assert(CVA_FitRangesOnBranches(x,0,2,2,4),"same branch remains accepted")
+    CVAT_Assert(CVA_CalculateFit(x,y,0,3,7,10,m1,b1,m2,b2,xe,ye,extrap)==0,"opposite branch calculation")
+    CVAT_Assert(abs(m1-2)<1e-12 && abs(b1-1)<1e-12 && abs(m2-4)<1e-12 && abs(b2+0.5)<1e-12,"opposite branch coefficients")
+    CVAT_Assert(abs(xe-0.75)<1e-12 && abs(ye-2.5)<1e-12,"opposite branch intersection")
+    CVAT_Assert(CVA_CalculateFit(x,y,10,7,3,0,m1,b1,m2,b2,xe,ye,extrap)==0,"reversed order calculation")
+    CVAT_Assert(abs(xe-0.75)<1e-12 && abs(ye-2.5)<1e-12,"reversed order intersection unchanged")
 End
 
 Function CVAT_Cursors(graph,a,b,c,d)
@@ -198,6 +215,16 @@ Function CVAT_State(testDF)
     CVAT_Assert(V_min<2 && V_max>2,"out-of-cycle intersection visible on voltage axis")
     GetAxis/Q/W=$graph left
     CVAT_Assert(V_min<5 && V_max>5,"out-of-cycle intersection visible on current axis")
+    potential2={0,0.2,0.4,0.6,0.8,1,0.8,0.6,0.4,0.2,0,-0.2}
+    current2=(p<=5) ? 2*potential2+1 : 4*potential2-0.5
+    CVAT_Assert(CVA_SwitchFit(graph,1,1)==0,"select cycle for cross-branch oxidation")
+    CVAT_Cursors(graph,0,3,7,10)
+    CVAT_Assert(CVA_FitRun(graph,1)==0,"save cross-branch oxidation")
+    Wave crossResult=$(sourceDF+"CVA_ox_2")
+    CVAT_Assert(abs(crossResult[0]-0.75)<1e-12 && abs(crossResult[1]-2.5)<1e-12,"saved cross-branch intersection")
+    CVAT_Assert(CVA_SwitchFit(graph,1,2)==0 && CVA_SwitchFit(graph,1,1)==0 && valid==1,"restore cross-branch result")
+    CVAT_Assert(pcsr(A,graph)==0 && pcsr(B,graph)==3 && pcsr(C,graph)==7 && pcsr(D,graph)==10,"restore cross-branch cursors")
+    CVAT_Assert(strsearch(note(crossResult),"C line: 120",0)>=0,"cross-branch result records source line")
     DoWindow/K $graph
     SetDataFolder $testDF
 End
