@@ -253,17 +253,30 @@ Function CVA_SummarizeAndPlot()
     Wave cycle_number
     SVAR source_filename
     Variable groups=CVA_CountCycles(cycle_number),j,start=0,finish
-    Make/D/N=(groups) summary_cycle, points, E_min_V, E_max_V, I_max_mA, E_at_Imax_V, I_min_mA, E_at_Imin_V, Q_positive_mAh, Q_negative_mAh, duration_s
+    CVA_CreateSummaryWaves(groups)
+    String en,iname
     String legendText="",graphName="",commonNote="File: "+source_filename+"\rCycles and source lines (inclusive, 1-based):\r"
     for(j=0;j<groups;j+=1)
         finish=CVA_CycleEnd(cycle_number,start)
         CVA_SummarizeCycle(j,start,finish)
-        CVA_PlotCycle(j,start,finish,graphName,legendText,commonNote)
+        en="E_cycle_"+num2str(j+1)
+        iname="I_cycle_"+num2str(j+1)
+        CVA_CreateCycleWaves(start,finish,en,iname)
+        CVA_AppendCycleNotes(start,finish,en,iname,commonNote)
+        CVA_PlotCycle(j,en,iname,graphName)
+        CVA_ColorTrace(graphName,iname,j)
+        CVA_AppendCycleLegend(j,iname,cycle_number[start],legendText)
         start=finish+1
     endfor
     CVA_AnnotateWaves(commonNote)
     CVA_StyleGraph(graphName,legendText)
+    CVA_PadGraphAxes(graphName)
     CVA_ShowSummary()
+End
+
+Function CVA_CreateSummaryWaves(groups)
+    Variable groups
+    Make/D/N=(groups) summary_cycle, points, E_min_V, E_max_V, I_max_mA, E_at_Imax_V, I_min_mA, E_at_Imin_V, Q_positive_mAh, Q_negative_mAh, duration_s
 End
 
 Function CVA_CountCycles(cycle_number)
@@ -295,15 +308,23 @@ End
 // Calculate extrema and signed charge within this cycle only.
 Function CVA_SummarizeCycle(j,start,finish)
     Variable j,start,finish
-    Wave time_s,Ewe_V,current_mA,cycle_number
-    Wave summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s
-    Variable i,dt,a,b,frac,qp,qn
+    Wave time_s,cycle_number
+    Wave summary_cycle,points,duration_s
     summary_cycle[j]=cycle_number[start]; points[j]=finish-start+1
     duration_s[j]=time_s[finish]-time_s[start]
+    CVA_SummarizeExtrema(j,start,finish)
+    CVA_SummarizeCharge(j,start,finish)
+End
+
+// Strict comparisons keep the first point when an extremum is repeated.
+Function CVA_SummarizeExtrema(j,start,finish)
+    Variable j,start,finish
+    Wave Ewe_V,current_mA
+    Wave E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V
+    Variable i
     E_min_V[j]=Ewe_V[start]; E_max_V[j]=Ewe_V[start]
     I_max_mA[j]=current_mA[start]; I_min_mA[j]=current_mA[start]
     E_at_Imax_V[j]=Ewe_V[start]; E_at_Imin_V[j]=Ewe_V[start]
-    qp=0; qn=0
     for(i=start;i<=finish;i+=1)
         E_min_V[j]=min(E_min_V[j],Ewe_V[i]); E_max_V[j]=max(E_max_V[j],Ewe_V[i])
         if(current_mA[i]>I_max_mA[j])
@@ -312,35 +333,50 @@ Function CVA_SummarizeCycle(j,start,finish)
         if(current_mA[i]<I_min_mA[j])
             I_min_mA[j]=current_mA[i]; E_at_Imin_V[j]=Ewe_V[i]
         endif
-        if(i>start)
-            dt=(time_s[i]-time_s[i-1])/3600
-            a=current_mA[i-1]; b=current_mA[i]
-            if(a>=0 && b>=0)
-                qp+=dt*(a+b)/2
-            elseif(a<=0 && b<=0)
-                qn+=dt*(a+b)/2
+    endfor
+End
+
+// Split a sign-changing interval at its linearly interpolated zero current.
+Function CVA_SummarizeCharge(j,start,finish)
+    Variable j,start,finish
+    Wave time_s,current_mA
+    Wave Q_positive_mAh,Q_negative_mAh
+    Variable i,dt,a,b,frac,qp=0,qn=0
+    for(i=start+1;i<=finish;i+=1)
+        dt=(time_s[i]-time_s[i-1])/3600
+        a=current_mA[i-1]; b=current_mA[i]
+        if(a>=0 && b>=0)
+            qp+=dt*(a+b)/2
+        elseif(a<=0 && b<=0)
+            qn+=dt*(a+b)/2
+        else
+            frac=abs(a)/(abs(a)+abs(b))
+            if(a>0)
+                qp+=dt*frac*a/2; qn+=dt*(1-frac)*b/2
             else
-                frac=abs(a)/(abs(a)+abs(b))
-                if(a>0)
-                    qp+=dt*frac*a/2; qn+=dt*(1-frac)*b/2
-                else
-                    qn+=dt*frac*a/2; qp+=dt*(1-frac)*b/2
-                endif
+                qn+=dt*frac*a/2; qp+=dt*(1-frac)*b/2
             endif
         endif
     endfor
     Q_positive_mAh[j]=qp; Q_negative_mAh[j]=qn
 End
 
-// Create cycle waves and record their source lines.
-Function CVA_CreateCycleWaves(j,start,finish,commonNote)
-    Variable j,start,finish
-    String &commonNote
-    Wave Ewe_V,current_mA,cycle_number,source_line
-    SVAR source_filename
-    String en="E_cycle_"+num2str(j+1), iname="I_cycle_"+num2str(j+1)
+// Duplicate only this cycle's measured potential and current.
+Function CVA_CreateCycleWaves(start,finish,en,iname)
+    Variable start,finish
+    String en,iname
+    Wave Ewe_V,current_mA
     Duplicate/O/R=[start,finish] Ewe_V,$en
     Duplicate/O/R=[start,finish] current_mA,$iname
+End
+
+// Cycle waves keep their own span; raw and summary waves receive all spans.
+Function CVA_AppendCycleNotes(start,finish,en,iname,commonNote)
+    Variable start,finish
+    String en,iname
+    String &commonNote
+    Wave cycle_number,source_line
+    SVAR source_filename
     Wave ew=$en, iw=$iname
     String cycleNote="File: "+source_filename+"\rCycle: "+num2str(cycle_number[start])+"\rStart line: "+num2istr(source_line[start])+"\rEnd line: "+num2istr(source_line[finish])+"\r"
     Note/K ew
@@ -350,12 +386,11 @@ Function CVA_CreateCycleWaves(j,start,finish,commonNote)
     commonNote+="Cycle "+num2str(cycle_number[start])+": "+num2istr(source_line[start])+" - "+num2istr(source_line[finish])+"\r"
 End
 
-Function CVA_PlotCycle(j,start,finish,graphName,legendText,commonNote)
-    Variable j,start,finish
-    String &graphName,&legendText,&commonNote
-    Wave cycle_number
-    CVA_CreateCycleWaves(j,start,finish,commonNote)
-    String en="E_cycle_"+num2str(j+1), iname="I_cycle_"+num2str(j+1)
+// Create the graph on the first cycle, then append the remaining traces.
+Function CVA_PlotCycle(j,en,iname,graphName)
+    Variable j
+    String en,iname
+    String &graphName
     Wave ew=$en, iw=$iname
     if(j==0)
         Display/K=1/W=(405,50,965,510) iw vs ew as "CV cycles"
@@ -363,11 +398,16 @@ Function CVA_PlotCycle(j,start,finish,graphName,legendText,commonNote)
     else
         AppendToGraph/W=$graphName iw vs ew
     endif
-    CVA_ColorTrace(graphName,iname,j)
+End
+
+Function CVA_AppendCycleLegend(j,iname,cycle,legendText)
+    Variable j,cycle
+    String iname
+    String &legendText
     if (j>0)
         legendText+="\r"
     endif
-    legendText+="\\s("+iname+") "+CVA_Ordinal(cycle_number[start])
+    legendText+="\\s("+iname+") "+CVA_Ordinal(cycle)
 End
 
 // First ten colors follow the reference InoColors sequence; repeat after 10.
@@ -409,6 +449,10 @@ Function CVA_StyleGraph(graphName,legendText)
     Label/W=$graphName bottom "\\Z14Cell Voltage \\f02E\\f00\\Bwe\\M\\Z14 / V"
     Label/W=$graphName left "\\Z14Current \\f02I\\f00 / mA"
     Legend/W=$graphName/C/N=text0/F=0/B=1/A=RB legendText
+End
+
+Function CVA_PadGraphAxes(graphName)
+    String graphName
     // Get Igor's autoscaled limits first, then add 15% of that span per side.
     SetAxis/W=$graphName/A bottom
     SetAxis/W=$graphName/A left
