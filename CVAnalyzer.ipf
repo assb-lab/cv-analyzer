@@ -572,6 +572,10 @@ Function CVA_FitOpen()
         DoAlert 0, "元ファイルの行番号を対応付けできません。"
         return -1
     endif
+    if(CVA_InitFitTable(sourceDF,allCycles)!=0)
+        DoAlert 0, "酸化還元電位の表を準備できません。既存の結果は変更していません。"
+        return -1
+    endif
     NewDataFolder/O root:Packages
     NewDataFolder/O root:Packages:CVAFit
     String oldDF=GetDataFolder(1)
@@ -582,8 +586,8 @@ Function CVA_FitOpen()
     Duplicate/O sourceI,fitI
     Duplicate/O sourceE,fitE
     Duplicate/O/R=[offset,offset+n-1] sourceLines,fitLines
-    String/G source_file=sourceFilename
-    Variable/G source_cycle=allCycles[cycleIndex], valid=0
+    String/G source_file=sourceFilename,source_folder=sourceDF
+    Variable/G source_cycle=allCycles[cycleIndex], source_index=cycleIndex, valid=0
     Wave fitI,fitE,fitLines
     Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
     graph=S_name
@@ -592,10 +596,14 @@ Function CVA_FitOpen()
     CVA_StyleGraph(graph,fitLegend)
     CVA_ColorTrace(graph,"fitI",cycleIndex)
     CVA_PadGraphAxes(graph)
-    ControlBar/W=$graph 74
+    ControlBar/W=$graph 232
     TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D を同じ走査枝に配置し、2 本の直線をフィットします。",fSize=11
-    TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="交点は選択範囲に依存します。カーソル移動後は再計算してください。",fSize=11
-    Button fitGo,win=$graph,pos={10,48},size={180,21},title="2接線の交点を計算",proc=CVA_FitButton
+    TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="酸化側または還元側を選び、計算して表に保存します。",fSize=11
+    Button fitOx,win=$graph,pos={10,48},size={160,21},title="酸化側を計算・保存",proc=CVA_FitButton
+    Button fitRed,win=$graph,pos={180,48},size={160,21},title="還元側を計算・保存",proc=CVA_FitButton
+    TitleBox fitTableLabel,win=$graph,pos={10,77},frame=0,title="保存済み交点電位 / V（* は外挿）",fSize=11
+    Wave/T fitTable=$(sourceDF+"CVA_fit_table"),fitTitles=$(sourceDF+"CVA_fit_titles")
+    ListBox fitTableView,win=$graph,pos={10,98},size={340,120},listWave=fitTable,titleWave=fitTitles,mode=1,fSize=11,widths={75,110,110}
     ShowInfo/W=$graph/CP={0,1}
     Cursor/P/W=$graph A,fitI,0
     Cursor/P/W=$graph B,fitI,floor((n-1)/6)
@@ -680,7 +688,15 @@ Function CVA_FitButton(ba) : ButtonControl
     if(ba.eventCode!=2)
         return 0
     endif
-    CVA_FitRun(ba.win)
+    Variable direction=0
+    if(cmpstr(ba.ctrlName,"fitOx")==0)
+        direction=1
+    elseif(cmpstr(ba.ctrlName,"fitRed")==0)
+        direction=2
+    else
+        return 0
+    endif
+    CVA_FitRun(ba.win,direction)
     return 0
 End
 
@@ -711,15 +727,16 @@ Function CVA_FitLine(x,y,lo,hi,slope,intercept)
     return (numtype(slope)!=0 || numtype(intercept)!=0) ? -1 : 0
 End
 
-Function CVA_FitRun(graph)
+Function CVA_FitRun(graph,direction)
     String graph
+    Variable direction
     String df=GetUserData(graph,"","fitDF"), names="A;B;C;D", info, trace, provenance, result
     Wave/Z x=$(df+"fitE"), y=$(df+"fitI"), lines=$(df+"fitLines")
-    NVAR/Z valid=$(df+"valid"),cyc=$(df+"source_cycle")
-    SVAR/Z filename=$(df+"source_file")
+    NVAR/Z valid=$(df+"valid"),cyc=$(df+"source_cycle"),cycleIndex=$(df+"source_index")
+    SVAR/Z filename=$(df+"source_file"),sourceFolder=$(df+"source_folder")
     Variable i,pA,pB,pC,pD,a,b,c,d,m1,b1,m2,b2,xe,ye,extrap
     CVA_FitInvalidate(graph)
-    if(!WaveExists(x) || !WaveExists(y) || !WaveExists(lines) || !NVAR_Exists(valid) || !NVAR_Exists(cyc) || !SVAR_Exists(filename))
+    if(!WaveExists(x) || !WaveExists(y) || !WaveExists(lines) || !NVAR_Exists(valid) || !NVAR_Exists(cyc) || !NVAR_Exists(cycleIndex) || !SVAR_Exists(filename) || !SVAR_Exists(sourceFolder))
         DoAlert 0,"フィット用データが見つかりません。"
         return -1
     endif
@@ -766,18 +783,77 @@ Function CVA_FitRun(graph)
     lx[0]=min(min(x[a],x[b]),min(min(x[c],x[d]),xe)); lx[1]=max(max(x[a],x[b]),max(max(x[c],x[d]),xe))
     ly1=m1*lx+b1; ly2=m2*lx+b2; ix[0]=xe; iy[0]=ye
     sprintf provenance, "AB slope (mA/V): %.17g\rAB intercept (mA): %.17g\rCD slope (mA/V): %.17g\rCD intercept (mA): %.17g\rIntersection E (V): %.17g\rIntersection I (mA): %.17g\r",m1,b1,m2,b2,xe,ye
-    provenance="File: "+filename+"\rCycle: "+num2str(cyc)+"\rA line: "+num2istr(lines[pA])+"\rB line: "+num2istr(lines[pB])+"\rC line: "+num2istr(lines[pC])+"\rD line: "+num2istr(lines[pD])+"\r"+provenance+"Extrapolated: "+num2istr(extrap)+"\r"
+    String side="Oxidation"
+    if(direction==2)
+        side="Reduction"
+    endif
+    provenance="File: "+filename+"\rCycle: "+num2str(cyc)+"\rSide selected: "+side+"\rA line: "+num2istr(lines[pA])+"\rB line: "+num2istr(lines[pB])+"\rC line: "+num2istr(lines[pC])+"\rD line: "+num2istr(lines[pD])+"\r"+provenance+"Extrapolated: "+num2istr(extrap)+"\r"
     Note/K iy
     Note iy,provenance
+    if(CVA_SaveFitResult(sourceFolder,cycleIndex,direction,xe,ye,extrap,provenance)!=0)
+        DoAlert 0,"結果表を更新できません。保存済み結果は変更していません。"
+        return -1
+    endif
     AppendToGraph/W=$graph ly1 vs lx
     AppendToGraph/W=$graph ly2 vs lx
     AppendToGraph/W=$graph iy vs ix
     ModifyGraph/W=$graph rgb(lineAB)=(65535,0,0),rgb(lineCD)=(0,0,65535),mode(intersectionY)=3,marker(intersectionY)=19
-    result="交点: E = "+num2str(xe)+" V, I = "+num2str(ye)+" mA"
+    result=side+" 交点: E = "+num2str(xe)+" V, I = "+num2str(ye)+" mA"
     if(extrap)
         result+="\r交点は少なくとも一方の範囲外（外挿）です。"
     endif
     TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
     valid=1
+    return 0
+End
+
+// One read-only table per imported dataset; rows follow summary_cycle order.
+Function CVA_InitFitTable(sourceDF,cycles)
+    String sourceDF
+    Wave cycles
+    Wave/T/Z existing=$(sourceDF+"CVA_fit_table")
+    Wave/T/Z headings=$(sourceDF+"CVA_fit_titles")
+    if(WaveExists(existing) || WaveExists(headings))
+        if(!WaveExists(existing) || !WaveExists(headings))
+            return -1
+        endif
+        if(DimSize(existing,0)!=numpnts(cycles) || DimSize(existing,1)!=3 || numpnts(headings)!=3)
+            return -1
+        endif
+        return 0
+    endif
+    Make/T/N=(numpnts(cycles),3) $(sourceDF+"CVA_fit_table")
+    Make/T/N=3 $(sourceDF+"CVA_fit_titles")
+    Wave/T table=$(sourceDF+"CVA_fit_table"),titles=$(sourceDF+"CVA_fit_titles")
+    titles[0]="Cycle"; titles[1]="酸化 / V"; titles[2]="還元 / V"
+    Variable i
+    for(i=0;i<numpnts(cycles);i+=1)
+        table[i][0]=num2str(cycles[i])
+        table[i][1]="—"; table[i][2]="—"
+    endfor
+    return 0
+End
+
+// Explicit button press replaces only the selected cycle/side's saved result.
+Function CVA_SaveFitResult(sourceDF,cycleIndex,direction,xe,ye,extrap,provenance)
+    String sourceDF,provenance
+    Variable cycleIndex,direction,xe,ye,extrap
+    Wave/T/Z table=$(sourceDF+"CVA_fit_table")
+    if(!WaveExists(table) || cycleIndex<0 || cycleIndex>=DimSize(table,0) || (direction!=1 && direction!=2))
+        return -1
+    endif
+    String resultName="CVA_ox_"+num2istr(cycleIndex+1)
+    if(direction==2)
+        resultName="CVA_red_"+num2istr(cycleIndex+1)
+    endif
+    Make/O/D/N=2 $(sourceDF+resultName)
+    Wave saved=$(sourceDF+resultName)
+    saved[0]=xe; saved[1]=ye
+    Note/K saved
+    Note saved,provenance
+    table[cycleIndex][direction]=num2str(xe)
+    if(extrap)
+        table[cycleIndex][direction]+="*"
+    endif
     return 0
 End
