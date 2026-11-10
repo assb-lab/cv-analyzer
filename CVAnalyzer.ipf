@@ -72,10 +72,9 @@ End
 Function CVA_Import(path, mode)
     String path
     Variable mode
-    String oldDF=GetDataFolder(1), line, header="", problem="", folder, technique="", filename, baseName, headerToken
-    Variable dot
-    Variable ref, lineNo=0, headerCount=NaN, i, n=0, capacity=4096
-    Variable cT=-1,cE=-1,cI=-1,cC=-1,t,e,current,cycle, lastT=-Inf,lastC=-Inf
+    String oldDF=GetDataFolder(1), problem="", folder, filename
+    Variable ref, lineNo=0, n=0, capacity=4096
+    Variable cT=-1,cE=-1,cI=-1,cC=-1
     if (mode != 1 && mode != 2)
         DoAlert 0, "Only normal CV is supported."
         return -1
@@ -85,6 +84,40 @@ Function CVA_Import(path, mode)
         DoAlert 0, "Cannot open the selected file."
         return -1
     endif
+    problem=CVA_ReadHeader(ref,lineNo,cT,cE,cI,cC)
+    folder=CVA_PrepareFolder(path,filename)
+    Make/D/N=(capacity) time_s, Ewe_V, current_mA, cycle_number, source_line
+    if (strlen(problem)==0)
+        problem=CVA_ReadRows(ref,lineNo,cT,cE,cI,cC,n,capacity)
+    endif
+    Close ref
+    if (n<2 && strlen(problem)==0)
+        problem="The file contains fewer than two data rows."
+    endif
+    if (strlen(problem)>0)
+        CVA_DiscardImport(folder,oldDF)
+        DoAlert 0, "CV import failed: "+problem
+        return -1
+    endif
+    Redimension/N=(n) time_s,Ewe_V,current_mA,cycle_number,source_line
+    String/G source_file=path
+    String/G source_filename=filename
+    String/G measurement_type="Normal CV - oxidation start"
+    if (mode==2)
+        measurement_type="Normal CV - reduction start"
+    endif
+    CVA_SummarizeAndPlot()
+    Print "CV Analyzer: imported "+num2str(n)+" rows from "+path+" into "+GetDataFolder(1)
+    SetDataFolder $oldDF
+    return 0
+End
+
+// Read and validate the EC-Lab header. The file remains open at the data rows.
+Function/S CVA_ReadHeader(ref,lineNo,cT,cE,cI,cC)
+    Variable ref
+    Variable &lineNo,&cT,&cE,&cI,&cC
+    String line,header="",problem="",technique="",headerToken
+    Variable headerCount=NaN
     FReadLine ref,line
     lineNo+=1
     if (strsearch(line,"EC-Lab ASCII FILE",0)<0)
@@ -130,6 +163,15 @@ Function CVA_Import(path, mode)
             problem="The header does not identify Cyclic Voltammetry."
         endif
     endif
+    return problem
+End
+
+// Create a distinct folder for this source and return its name.
+Function/S CVA_PrepareFolder(path,filename)
+    String path
+    String &filename
+    String folder,baseName
+    Variable dot
     NewDataFolder/O root:CVAnalyzer
     SetDataFolder root:CVAnalyzer
     // Accept both Igor colon paths and POSIX paths.
@@ -150,11 +192,17 @@ Function CVA_Import(path, mode)
     endif
     folder=UniqueName(baseName,11,0)
     NewDataFolder/S $folder
-    Make/D/N=(capacity) time_s, Ewe_V, current_mA, cycle_number, source_line
+    return folder
+End
+
+// Read validated data rows into the current import folder.
+Function/S CVA_ReadRows(ref,lineNo,cT,cE,cI,cC,n,capacity)
+    Variable ref,cT,cE,cI,cC
+    Variable &lineNo,&n,&capacity
+    String line,problem=""
+    Variable t,e,current,cycle,lastT=-Inf,lastC=-Inf
+    Wave time_s,Ewe_V,current_mA,cycle_number,source_line
     do
-        if (strlen(problem)>0)
-            break
-        endif
         FReadLine ref,line
         if (strlen(line)==0)
             break
@@ -188,122 +236,199 @@ Function CVA_Import(path, mode)
         time_s[n]=t; Ewe_V[n]=e; current_mA[n]=current; cycle_number[n]=cycle; source_line[n]=lineNo
         lastT=t; lastC=cycle; n+=1
     while (1)
-    Close ref
-    if (n<2 && strlen(problem)==0)
-        problem="The file contains fewer than two data rows."
-    endif
-    if (strlen(problem)>0)
-        SetDataFolder root:CVAnalyzer
-        KillDataFolder $folder
-        SetDataFolder $oldDF
-        DoAlert 0, "CV import failed: "+problem
-        return -1
-    endif
-    Redimension/N=(n) time_s,Ewe_V,current_mA,cycle_number,source_line
-    String/G source_file=path
-    String/G source_filename=filename
-    String/G measurement_type="Normal CV - oxidation start"
-    if (mode==2)
-        measurement_type="Normal CV - reduction start"
-    endif
-    CVA_SummarizeAndPlot()
-    Print "CV Analyzer: imported "+num2str(n)+" rows from "+path+" into "+GetDataFolder(1)
+    return problem
+End
+
+Function CVA_DiscardImport(folder,oldDF)
+    String folder,oldDF
+    SetDataFolder root:CVAnalyzer
+    KillDataFolder $folder
     SetDataFolder $oldDF
-    return 0
 End
 
 // Per file cycle: extrema are raw, without baseline subtraction. Charge is
 // trapezoidal integral of positive/negative current versus time in mAh.
 // Intervals spanning different cycle numbers are deliberately excluded.
 Function CVA_SummarizeAndPlot()
-    Wave time_s,Ewe_V,current_mA,cycle_number,source_line
+    Wave cycle_number
     SVAR source_filename
-    Variable n=numpnts(time_s), groups=1,i,j,k,start,finish,dt,a,b,frac,qp,qn
+    Variable groups=CVA_CountCycles(cycle_number),j,start=0,finish
+    CVA_CreateSummaryWaves(groups)
+    String en,iname
+    String legendText="",graphName="",commonNote="File: "+source_filename+"\rCycles and source lines (inclusive, 1-based):\r"
+    for(j=0;j<groups;j+=1)
+        finish=CVA_CycleEnd(cycle_number,start)
+        CVA_SummarizeCycle(j,start,finish)
+        en="E_cycle_"+num2str(j+1)
+        iname="I_cycle_"+num2str(j+1)
+        CVA_CreateCycleWaves(start,finish,en,iname)
+        CVA_AppendCycleNotes(start,finish,en,iname,commonNote)
+        CVA_PlotCycle(j,en,iname,graphName)
+        CVA_ColorTrace(graphName,iname,j)
+        CVA_AppendCycleLegend(j,iname,cycle_number[start],legendText)
+        start=finish+1
+    endfor
+    CVA_AnnotateWaves(commonNote)
+    CVA_StyleGraph(graphName,legendText)
+    CVA_PadGraphAxes(graphName)
+    CVA_ShowSummary()
+End
+
+Function CVA_CreateSummaryWaves(groups)
+    Variable groups
+    Make/D/N=(groups) summary_cycle, points, E_min_V, E_max_V, I_max_mA, E_at_Imax_V, I_min_mA, E_at_Imin_V, Q_positive_mAh, Q_negative_mAh, duration_s
+End
+
+Function CVA_CountCycles(cycle_number)
+    Wave cycle_number
+    Variable n=numpnts(cycle_number),groups=1,i
     for(i=1;i<n;i+=1)
         if(cycle_number[i]!=cycle_number[i-1])
             groups+=1
         endif
     endfor
-    Make/D/N=(groups) summary_cycle, points, E_min_V, E_max_V, I_max_mA, E_at_Imax_V, I_min_mA, E_at_Imin_V, Q_positive_mAh, Q_negative_mAh, duration_s
-    Variable graphMade=0
-    String legendText="", graphName, tableName, cycleNote, commonNote="File: "+source_filename+"\rCycles and source lines (inclusive, 1-based):\r", waveNames, waveName
-    // First ten colors follow the reference InoColors sequence; repeat after 10.
+    return groups
+End
+
+Function CVA_CycleEnd(cycle_number,start)
+    Wave cycle_number
+    Variable start
+    Variable finish=start,n=numpnts(cycle_number)
+    do
+        if (finish+1>=n)
+            break
+        endif
+        if (cycle_number[finish+1]!=cycle_number[start])
+            break
+        endif
+        finish+=1
+    while(1)
+    return finish
+End
+
+// Calculate extrema and signed charge within this cycle only.
+Function CVA_SummarizeCycle(j,start,finish)
+    Variable j,start,finish
+    Wave time_s,cycle_number
+    Wave summary_cycle,points,duration_s
+    summary_cycle[j]=cycle_number[start]; points[j]=finish-start+1
+    duration_s[j]=time_s[finish]-time_s[start]
+    CVA_SummarizeExtrema(j,start,finish)
+    CVA_SummarizeCharge(j,start,finish)
+End
+
+// Strict comparisons keep the first point when an extremum is repeated.
+Function CVA_SummarizeExtrema(j,start,finish)
+    Variable j,start,finish
+    Wave Ewe_V,current_mA
+    Wave E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V
+    Variable i
+    E_min_V[j]=Ewe_V[start]; E_max_V[j]=Ewe_V[start]
+    I_max_mA[j]=current_mA[start]; I_min_mA[j]=current_mA[start]
+    E_at_Imax_V[j]=Ewe_V[start]; E_at_Imin_V[j]=Ewe_V[start]
+    for(i=start;i<=finish;i+=1)
+        E_min_V[j]=min(E_min_V[j],Ewe_V[i]); E_max_V[j]=max(E_max_V[j],Ewe_V[i])
+        if(current_mA[i]>I_max_mA[j])
+            I_max_mA[j]=current_mA[i]; E_at_Imax_V[j]=Ewe_V[i]
+        endif
+        if(current_mA[i]<I_min_mA[j])
+            I_min_mA[j]=current_mA[i]; E_at_Imin_V[j]=Ewe_V[i]
+        endif
+    endfor
+End
+
+// Split a sign-changing interval at its linearly interpolated zero current.
+Function CVA_SummarizeCharge(j,start,finish)
+    Variable j,start,finish
+    Wave time_s,current_mA
+    Wave Q_positive_mAh,Q_negative_mAh
+    Variable i,dt,a,b,frac,qp=0,qn=0
+    for(i=start+1;i<=finish;i+=1)
+        dt=(time_s[i]-time_s[i-1])/3600
+        a=current_mA[i-1]; b=current_mA[i]
+        if(a>=0 && b>=0)
+            qp+=dt*(a+b)/2
+        elseif(a<=0 && b<=0)
+            qn+=dt*(a+b)/2
+        else
+            frac=abs(a)/(abs(a)+abs(b))
+            if(a>0)
+                qp+=dt*frac*a/2; qn+=dt*(1-frac)*b/2
+            else
+                qn+=dt*frac*a/2; qp+=dt*(1-frac)*b/2
+            endif
+        endif
+    endfor
+    Q_positive_mAh[j]=qp; Q_negative_mAh[j]=qn
+End
+
+// Duplicate only this cycle's measured potential and current.
+Function CVA_CreateCycleWaves(start,finish,en,iname)
+    Variable start,finish
+    String en,iname
+    Wave Ewe_V,current_mA
+    Duplicate/O/R=[start,finish] Ewe_V,$en
+    Duplicate/O/R=[start,finish] current_mA,$iname
+End
+
+// Cycle waves keep their own span; raw and summary waves receive all spans.
+Function CVA_AppendCycleNotes(start,finish,en,iname,commonNote)
+    Variable start,finish
+    String en,iname
+    String &commonNote
+    Wave cycle_number,source_line
+    SVAR source_filename
+    Wave ew=$en, iw=$iname
+    String cycleNote="File: "+source_filename+"\rCycle: "+num2str(cycle_number[start])+"\rStart line: "+num2istr(source_line[start])+"\rEnd line: "+num2istr(source_line[finish])+"\r"
+    Note/K ew
+    Note/K iw
+    Note ew,cycleNote
+    Note iw,cycleNote
+    commonNote+="Cycle "+num2str(cycle_number[start])+": "+num2istr(source_line[start])+" - "+num2istr(source_line[finish])+"\r"
+End
+
+// Create the graph on the first cycle, then append the remaining traces.
+Function CVA_PlotCycle(j,en,iname,graphName)
+    Variable j
+    String en,iname
+    String &graphName
+    Wave ew=$en, iw=$iname
+    if(j==0)
+        Display/K=1/W=(405,50,965,510) iw vs ew as "CV cycles"
+        graphName=S_name
+    else
+        AppendToGraph/W=$graphName iw vs ew
+    endif
+End
+
+Function CVA_AppendCycleLegend(j,iname,cycle,legendText)
+    Variable j,cycle
+    String iname
+    String &legendText
+    if (j>0)
+        legendText+="\r"
+    endif
+    legendText+="\\s("+iname+") "+CVA_Ordinal(cycle)
+End
+
+// First ten colors follow the reference InoColors sequence; repeat after 10.
+Function CVA_ColorTrace(graphName,iname,j)
+    String graphName,iname
+    Variable j
     String reds="65535;13106;0;59604;52428;0;51655;53173;869;12135"
     String greens="0;0;48704;35614;0;38659;52875;524;34359;62866"
     String blues="0;65535;25731;394;65535;43342;174;28486;65535;289"
-    Variable colorIndex,red,green,blue
-    start=0
-    for(j=0;j<groups;j+=1)
-        finish=start
-        do
-            if (finish+1>=n)
-                break
-            endif
-            if (cycle_number[finish+1]!=cycle_number[start])
-                break
-            endif
-            finish+=1
-        while(1)
-        summary_cycle[j]=cycle_number[start]; points[j]=finish-start+1
-        duration_s[j]=time_s[finish]-time_s[start]
-        E_min_V[j]=Ewe_V[start]; E_max_V[j]=Ewe_V[start]
-        I_max_mA[j]=current_mA[start]; I_min_mA[j]=current_mA[start]
-        E_at_Imax_V[j]=Ewe_V[start]; E_at_Imin_V[j]=Ewe_V[start]
-        qp=0; qn=0
-        for(i=start;i<=finish;i+=1)
-            E_min_V[j]=min(E_min_V[j],Ewe_V[i]); E_max_V[j]=max(E_max_V[j],Ewe_V[i])
-            if(current_mA[i]>I_max_mA[j])
-                I_max_mA[j]=current_mA[i]; E_at_Imax_V[j]=Ewe_V[i]
-            endif
-            if(current_mA[i]<I_min_mA[j])
-                I_min_mA[j]=current_mA[i]; E_at_Imin_V[j]=Ewe_V[i]
-            endif
-            if(i>start)
-                dt=(time_s[i]-time_s[i-1])/3600
-                a=current_mA[i-1]; b=current_mA[i]
-                if(a>=0 && b>=0)
-                    qp+=dt*(a+b)/2
-                elseif(a<=0 && b<=0)
-                    qn+=dt*(a+b)/2
-                else
-                    frac=abs(a)/(abs(a)+abs(b))
-                    if(a>0)
-                        qp+=dt*frac*a/2; qn+=dt*(1-frac)*b/2
-                    else
-                        qn+=dt*frac*a/2; qp+=dt*(1-frac)*b/2
-                    endif
-                endif
-            endif
-        endfor
-        Q_positive_mAh[j]=qp; Q_negative_mAh[j]=qn
-        String en="E_cycle_"+num2str(j+1), iname="I_cycle_"+num2str(j+1)
-        Duplicate/O/R=[start,finish] Ewe_V,$en
-        Duplicate/O/R=[start,finish] current_mA,$iname
-        Wave ew=$en, iw=$iname
-        cycleNote="File: "+source_filename+"\rCycle: "+num2str(cycle_number[start])+"\rStart line: "+num2istr(source_line[start])+"\rEnd line: "+num2istr(source_line[finish])+"\r"
-        Note/K ew
-        Note/K iw
-        Note ew,cycleNote
-        Note iw,cycleNote
-        commonNote+="Cycle "+num2str(cycle_number[start])+": "+num2istr(source_line[start])+" - "+num2istr(source_line[finish])+"\r"
-        if(!graphMade)
-            Display/K=1/W=(405,50,965,510) iw vs ew as "CV cycles"
-            graphName=S_name
-            graphMade=1
-        else
-            AppendToGraph/W=$graphName iw vs ew
-        endif
-        colorIndex=mod(j,10)
-        red=str2num(StringFromList(colorIndex,reds))
-        green=str2num(StringFromList(colorIndex,greens))
-        blue=str2num(StringFromList(colorIndex,blues))
-        ModifyGraph/W=$graphName rgb($iname)=(red,green,blue)
-        if (j>0)
-            legendText+="\r"
-        endif
-        legendText+="\\s("+iname+") "+CVA_Ordinal(cycle_number[start])
-        start=finish+1
-    endfor
+    Variable colorIndex=mod(j,10)
+    Variable red=str2num(StringFromList(colorIndex,reds))
+    Variable green=str2num(StringFromList(colorIndex,greens))
+    Variable blue=str2num(StringFromList(colorIndex,blues))
+    ModifyGraph/W=$graphName rgb($iname)=(red,green,blue)
+End
+
+Function CVA_AnnotateWaves(commonNote)
+    String commonNote
+    String waveNames,waveName
+    Variable k
     // Raw and summary waves cover all cycles; preserve each cycle's line span.
     waveNames=WaveList("*",";","")
     for (k=0;k<ItemsInList(waveNames);k+=1)
@@ -315,12 +440,20 @@ Function CVA_SummarizeAndPlot()
         Note/K noteWave
         Note noteWave,commonNote
     endfor
+End
+
+Function CVA_StyleGraph(graphName,legendText)
+    String graphName,legendText
     // Igor graph dimensions are points (72 points/inch), before expansion.
     ModifyGraph/W=$graphName mirror=1, tick=2, expand=2, gfSize=12, width=226.77165, height=170.07874, margin(left)=56, margin(bottom)=39, margin(right)=14, margin(top)=14
     ModifyGraph/W=$graphName manTick(bottom)={0,1,0,1},manMinor(bottom)={4,50}
     Label/W=$graphName bottom "\\Z14Cell Voltage \\f02E\\f00\\Bwe\\M\\Z14 / V"
     Label/W=$graphName left "\\Z14Current \\f02I\\f00 / mA"
     Legend/W=$graphName/C/N=text0/F=0/B=1/A=RB legendText
+End
+
+Function CVA_PadGraphAxes(graphName)
+    String graphName
     // Get Igor's autoscaled limits first, then add 15% of that span per side.
     SetAxis/W=$graphName/A bottom
     SetAxis/W=$graphName/A left
@@ -335,6 +468,11 @@ Function CVA_SummarizeAndPlot()
     if (numtype(margin)==0 && margin>0)
         SetAxis/W=$graphName left,lo-margin,hi+margin
     endif
+End
+
+Function CVA_ShowSummary()
+    Wave summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s
+    String tableName
     Edit/K=1/W=(20,530,385,770) summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s as "CV cycle summary"
     tableName=S_name
     ModifyTable/W=$tableName size=12
