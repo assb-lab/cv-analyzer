@@ -124,47 +124,43 @@ Function/S CVA_ReadHeader(ref,lineNo,cT,cE,cI,cC)
     FReadLine ref,line
     lineNo+=1
     if (strsearch(line,"EC-Lab ASCII FILE",0)<0)
-        problem="Not an EC-Lab ASCII MPT file."
+        return "Not an EC-Lab ASCII MPT file."
     endif
-    if (strlen(problem)==0)
+    FReadLine ref,line
+    lineNo+=1
+    if (strsearch(line,"Nb header lines",0)<0)
+        return "Missing Nb header lines declaration."
+    endif
+    headerToken=StringFromList(1,line,":")
+    headerToken=ReplaceString("\r",headerToken,"")
+    headerToken=ReplaceString("\n",headerToken,"")
+    headerCount=str2num(headerToken)
+    if (!CVA_IsNumber(headerToken) || numtype(headerCount)!=0 || headerCount<3 || headerCount>100000 || headerCount!=floor(headerCount))
+        return "Invalid header line count."
+    endif
+    do
         FReadLine ref,line
         lineNo+=1
-        if (strsearch(line,"Nb header lines",0)<0)
-            problem="Missing Nb header lines declaration."
-        else
-            headerToken=StringFromList(1,line,":")
-            headerToken=ReplaceString("\r",headerToken,"")
-            headerToken=ReplaceString("\n",headerToken,"")
-            headerCount=str2num(headerToken)
-            if (!CVA_IsNumber(headerToken) || numtype(headerCount)!=0 || headerCount<3 || headerCount>100000 || headerCount!=floor(headerCount))
-                problem="Invalid header line count."
-            endif
+        if (strlen(line)==0)
+            problem="File ended before the column header."
+            break
         endif
+        if (lineNo==4)
+            technique=line
+        endif
+    while (lineNo<headerCount)
+    // Preserve the original diagnostic precedence, even after an early EOF.
+    header=ReplaceString("\r",line,"")
+    header=ReplaceString("\n",header,"")
+    cT=WhichListItem("time/s",header,"\t")
+    cE=WhichListItem("Ewe/V",header,"\t")
+    cI=WhichListItem("<I>/mA",header,"\t")
+    cC=WhichListItem("cycle number",header,"\t")
+    if (cT<0 || cE<0 || cI<0 || cC<0)
+        problem="Required columns missing: time/s, Ewe/V, <I>/mA, cycle number."
     endif
-    if (strlen(problem)==0)
-        do
-            FReadLine ref,line
-            lineNo+=1
-            if (strlen(line)==0)
-                problem="File ended before the column header."
-                break
-            endif
-            if (lineNo==4)
-                technique=line
-            endif
-        while (lineNo<headerCount)
-        header=ReplaceString("\r",line,"")
-        header=ReplaceString("\n",header,"")
-        cT=WhichListItem("time/s",header,"\t")
-        cE=WhichListItem("Ewe/V",header,"\t")
-        cI=WhichListItem("<I>/mA",header,"\t")
-        cC=WhichListItem("cycle number",header,"\t")
-        if (cT<0 || cE<0 || cI<0 || cC<0)
-            problem="Required columns missing: time/s, Ewe/V, <I>/mA, cycle number."
-        endif
-        if (strsearch(LowerStr(technique),"cyclic voltammetry",0)<0)
-            problem="The header does not identify Cyclic Voltammetry."
-        endif
+    if (strsearch(LowerStr(technique),"cyclic voltammetry",0)<0)
+        problem="The header does not identify Cyclic Voltammetry."
     endif
     return problem
 End
@@ -216,20 +212,8 @@ Function/S CVA_ReadRows(ref,lineNo,cT,cE,cI,cC,n,capacity)
         if (strlen(line)==0)
             continue
         endif
-        if (!CVA_IsNumber(StringFromList(cT,line,"\t")) || !CVA_IsNumber(StringFromList(cE,line,"\t")) || !CVA_IsNumber(StringFromList(cI,line,"\t")) || !CVA_IsNumber(StringFromList(cC,line,"\t")))
-            problem="Invalid or missing required numeric value at line "+num2str(lineNo)+"."
-            break
-        endif
-        t=str2num(StringFromList(cT,line,"\t"))
-        e=str2num(StringFromList(cE,line,"\t"))
-        current=str2num(StringFromList(cI,line,"\t"))
-        cycle=str2num(StringFromList(cC,line,"\t"))
-        if (numtype(t)!=0 || numtype(e)!=0 || numtype(current)!=0 || numtype(cycle)!=0)
-            problem="Invalid or missing required numeric value at line "+num2str(lineNo)+"."
-            break
-        endif
-        if (t<lastT || cycle<lastC || cycle!=floor(cycle))
-            problem="Time or cycle number is out of order at line "+num2str(lineNo)+"."
+        problem=CVA_ParseDataRow(line,lineNo,cT,cE,cI,cC,lastT,lastC,t,e,current,cycle)
+        if (strlen(problem)>0)
             break
         endif
         if (n>=capacity)
@@ -240,6 +224,27 @@ Function/S CVA_ReadRows(ref,lineNo,cT,cE,cI,cC,n,capacity)
         lastT=t; lastC=cycle; n+=1
     while (1)
     return problem
+End
+
+// Validate lexical values before conversion, then enforce acquisition order.
+Function/S CVA_ParseDataRow(line,lineNo,cT,cE,cI,cC,lastT,lastC,t,e,current,cycle)
+    String line
+    Variable lineNo,cT,cE,cI,cC,lastT,lastC
+    Variable &t,&e,&current,&cycle
+    if (!CVA_IsNumber(StringFromList(cT,line,"\t")) || !CVA_IsNumber(StringFromList(cE,line,"\t")) || !CVA_IsNumber(StringFromList(cI,line,"\t")) || !CVA_IsNumber(StringFromList(cC,line,"\t")))
+        return "Invalid or missing required numeric value at line "+num2str(lineNo)+"."
+    endif
+    t=str2num(StringFromList(cT,line,"\t"))
+    e=str2num(StringFromList(cE,line,"\t"))
+    current=str2num(StringFromList(cI,line,"\t"))
+    cycle=str2num(StringFromList(cC,line,"\t"))
+    if (numtype(t)!=0 || numtype(e)!=0 || numtype(current)!=0 || numtype(cycle)!=0)
+        return "Invalid or missing required numeric value at line "+num2str(lineNo)+"."
+    endif
+    if (t<lastT || cycle<lastC || cycle!=floor(cycle))
+        return "Time or cycle number is out of order at line "+num2str(lineNo)+"."
+    endif
+    return ""
 End
 
 Function CVA_DiscardImport(folder,oldDF)
@@ -351,16 +356,18 @@ Function CVA_SummarizeCharge(j,start,finish)
         a=current_mA[i-1]; b=current_mA[i]
         if(a>=0 && b>=0)
             qp+=dt*(a+b)/2
-        elseif(a<=0 && b<=0)
-            qn+=dt*(a+b)/2
-        else
-            frac=abs(a)/(abs(a)+abs(b))
-            if(a>0)
-                qp+=dt*frac*a/2; qn+=dt*(1-frac)*b/2
-            else
-                qn+=dt*frac*a/2; qp+=dt*(1-frac)*b/2
-            endif
+            continue
         endif
+        if(a<=0 && b<=0)
+            qn+=dt*(a+b)/2
+            continue
+        endif
+        frac=abs(a)/(abs(a)+abs(b))
+        if(a>0)
+            qp+=dt*frac*a/2; qn+=dt*(1-frac)*b/2
+            continue
+        endif
+        qn+=dt*frac*a/2; qp+=dt*(1-frac)*b/2
     endfor
     Q_positive_mAh[j]=qp; Q_negative_mAh[j]=qn
 End
@@ -539,15 +546,18 @@ Function CVA_ActivateFitEditor(graphs,sourceDF)
     for(i=0;i<ItemsInList(graphs);i+=1)
         graph=StringFromList(i,graphs)
         fitDF=GetUserData(graph,"","fitDF")
-        if(strlen(fitDF)>0)
-            SVAR/Z openSource=$(fitDF+"source_folder")
-            if(SVAR_Exists(openSource))
-                if(cmpstr(openSource,sourceDF)==0)
-                    DoWindow/F $graph
-                    return 1
-                endif
-            endif
+        if(strlen(fitDF)==0)
+            continue
         endif
+        SVAR/Z openSource=$(fitDF+"source_folder")
+        if(!SVAR_Exists(openSource))
+            continue
+        endif
+        if(cmpstr(openSource,sourceDF)!=0)
+            continue
+        endif
+        DoWindow/F $graph
+        return 1
     endfor
     return 0
 End
@@ -586,16 +596,33 @@ End
 // Validate and prepare the scratch folder before building its graph.
 Function CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
     String sourceGraph,selection,sourceDF
-    String fitDF,folder,graph
-    Variable n,i
     Wave sourceI=TraceNameToWaveRef(sourceGraph,selection)
+    Variable cycleIndex,offset,initialCycle,initialSide
+    if(CVA_ValidateEditorSource(selection,sourceDF,sourceI,cycleIndex,offset)!=0)
+        return -1
+    endif
+    String oldDF=GetDataFolder(1)
+    String fitDF=CVA_CreateFitScratch(selection,sourceDF,sourceI,cycleIndex,offset,initialCycle,initialSide)
+    String graph=CVA_CreateFitGraph(fitDF,sourceDF,cycleIndex,initialCycle,initialSide)
+    CVA_PlaceFitBelow(sourceGraph,graph)
+    SetDataFolder $oldDF
+    return 0
+End
+
+// This initial-open policy deliberately differs from switch/source-match checks.
+Function CVA_ValidateEditorSource(selection,sourceDF,sourceI,cycleIndex,offset)
+    String selection,sourceDF
+    Wave sourceI
+    Variable &cycleIndex,&offset
+    Variable n,i
     String suffix=selection[strlen("I_cycle_"),inf]
     Wave/Z sourceE=$(sourceDF+"E_cycle_"+suffix)
     Wave/Z sourceLines=$(sourceDF+"source_line")
     Wave/Z allCycles=$(sourceDF+"summary_cycle")
     Wave/Z counts=$(sourceDF+"points")
     SVAR/Z sourceFilename=$(sourceDF+"source_file")
-    Variable cycleIndex=str2num(suffix)-1,offset=0
+    cycleIndex=str2num(suffix)-1
+    offset=0
     if (!WaveExists(sourceE) || !WaveExists(sourceLines) || !WaveExists(allCycles) || !WaveExists(counts) || !SVAR_Exists(sourceFilename))
         DoAlert 0, "元の電位・行番号・サイクル情報が見つかりません。"
         return -1
@@ -616,9 +643,21 @@ Function CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
         DoAlert 0, "酸化還元電位の表を準備できません。既存の結果は変更していません。"
         return -1
     endif
+    return 0
+End
+
+// Leave the current data folder at the new isolated scratch copy for graph setup.
+Function/S CVA_CreateFitScratch(selection,sourceDF,sourceI,cycleIndex,offset,initialCycle,initialSide)
+    String selection,sourceDF
+    Wave sourceI
+    Variable cycleIndex,offset
+    Variable &initialCycle,&initialSide
+    String folder,fitDF,suffix=selection[strlen("I_cycle_"),inf]
+    Wave sourceE=$(sourceDF+"E_cycle_"+suffix),sourceLines=$(sourceDF+"source_line"),allCycles=$(sourceDF+"summary_cycle")
+    SVAR sourceFilename=$(sourceDF+"source_file")
+    Variable n=numpnts(sourceI)
     NewDataFolder/O root:Packages
     NewDataFolder/O root:Packages:CVAFit
-    String oldDF=GetDataFolder(1)
     SetDataFolder root:Packages:CVAFit
     folder=UniqueName("fit",11,0)
     NewDataFolder/S $folder
@@ -628,7 +667,7 @@ Function CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
     Duplicate/O/R=[offset,offset+n-1] sourceLines,fitLines
     String/G source_file=sourceFilename,source_folder=sourceDF
     NVAR lastCycle=$(sourceDF+"CVA_fit_last_cycle"),lastSide=$(sourceDF+"CVA_fit_last_side")
-    Variable initialCycle=lastCycle,initialSide=lastSide
+    initialCycle=lastCycle; initialSide=lastSide
     if(initialCycle<0 || initialCycle>=numpnts(allCycles) || initialCycle!=floor(initialCycle))
         initialCycle=0
     endif
@@ -636,6 +675,14 @@ Function CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
         initialSide=1
     endif
     Variable/G source_cycle=allCycles[cycleIndex], source_index=cycleIndex, selected_side=1, switching=0, valid=0, initialized=0
+    return fitDF
+End
+
+Function/S CVA_CreateFitGraph(fitDF,sourceDF,cycleIndex,initialCycle,initialSide)
+    String fitDF,sourceDF
+    Variable cycleIndex,initialCycle,initialSide
+    String graph
+    Wave allCycles=$(sourceDF+"summary_cycle")
     Wave fitI,fitE,fitLines
     Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
     graph=S_name
@@ -646,9 +693,7 @@ Function CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
     CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
     SetWindow $graph,hook(CVAFit)=CVA_FitHook
     CVA_SwitchFit(graph,initialCycle,initialSide)
-    CVA_PlaceFitBelow(sourceGraph,graph)
-    SetDataFolder $oldDF
-    return 0
+    return graph
 End
 
 // Keep the fitting control layout independent of scratch-data preparation.
@@ -707,19 +752,17 @@ Function CVA_FitSameBranch(x,lo,hi)
         if(numtype(x[i])!=0)
             return 0
         endif
-        if(i>lo)
-            delta=x[i]-x[i-1]
-            if(delta>0)
-                if(direction<0)
-                    return 0
-                endif
-                direction=1
-            elseif(delta<0)
-                if(direction>0)
-                    return 0
-                endif
-                direction=-1
-            endif
+        if(i==lo)
+            continue
+        endif
+        delta=x[i]-x[i-1]
+        if((delta>0 && direction<0) || (delta<0 && direction>0))
+            return 0
+        endif
+        if(delta>0)
+            direction=1
+        elseif(delta<0)
+            direction=-1
         endif
     endfor
     return direction!=0
@@ -788,6 +831,13 @@ Function CVA_FitSourceMatches(graph)
     if(!SVAR_Exists(sourceFolder) || !NVAR_Exists(cycleIndex) || !NVAR_Exists(cyc) || !WaveExists(x) || !WaveExists(y) || !WaveExists(lines))
         return 0
     endif
+    return CVA_FitCopyMatchesSource(sourceFolder,cycleIndex,cyc,x,y,lines)
+End
+
+Function CVA_FitCopyMatchesSource(sourceFolder,cycleIndex,cyc,x,y,lines)
+    String sourceFolder
+    Variable cycleIndex,cyc
+    Wave x,y,lines
     Wave/Z cycles=$(sourceFolder+"summary_cycle"),counts=$(sourceFolder+"points"),allLines=$(sourceFolder+"source_line")
     if(!WaveExists(cycles) || !WaveExists(counts) || !WaveExists(allLines))
         return 0
@@ -1003,14 +1053,11 @@ Function CVA_InitFitTable(sourceDF,cycles)
         Variable/G $(sourceDF+"CVA_fit_last_side")=1
     endif
     Wave/Z cursors=$(sourceDF+"CVA_fit_cursors")
-    if(WaveExists(cursors) && (DimSize(cursors,0)!=numpnts(cycles) || DimSize(cursors,1)!=2 || DimSize(cursors,2)!=4))
+    if(!CVA_ExistingCursorTableValid(cursors,numpnts(cycles)))
         return -1
     endif
     if(WaveExists(existing) || WaveExists(headings))
-        if(!WaveExists(existing) || !WaveExists(headings))
-            return -1
-        endif
-        if(DimSize(existing,0)!=numpnts(cycles) || DimSize(existing,1)!=3 || numpnts(headings)!=3)
+        if(!CVA_ExistingFitTableValid(existing,headings,numpnts(cycles)))
             return -1
         endif
         if(!WaveExists(cursors))
@@ -1031,6 +1078,25 @@ Function CVA_InitFitTable(sourceDF,cycles)
         table[i][1]="—"; table[i][2]="—"
     endfor
     return 0
+End
+
+// Missing cursors may be initialized, but an existing table must have this shape.
+Function CVA_ExistingCursorTableValid(cursors,cycleCount)
+    Wave/Z cursors
+    Variable cycleCount
+    if(!WaveExists(cursors))
+        return 1
+    endif
+    return !(DimSize(cursors,0)!=cycleCount || DimSize(cursors,1)!=2 || DimSize(cursors,2)!=4)
+End
+
+Function CVA_ExistingFitTableValid(table,headings,cycleCount)
+    Wave/T/Z table,headings
+    Variable cycleCount
+    if(!WaveExists(table) || !WaveExists(headings))
+        return 0
+    endif
+    return !(DimSize(table,0)!=cycleCount || DimSize(table,1)!=3 || numpnts(headings)!=3)
 End
 
 // Explicit button press replaces only the selected cycle/side's saved result.
@@ -1172,10 +1238,7 @@ Function CVA_ValidateFitSwitch(df,sourceFolder,nextCycle,nextSide,offset)
     if(!WaveExists(allCycles) || !WaveExists(counts) || !WaveExists(allLines) || !WaveExists(positions) || !WaveExists(x) || !WaveExists(y) || !WaveExists(lines))
         return -1
     endif
-    if(numtype(nextCycle)!=0 || nextCycle!=floor(nextCycle) || nextCycle<0 || nextCycle>=numpnts(allCycles) || nextCycle>=numpnts(counts) || (nextSide!=1 && nextSide!=2))
-        return -1
-    endif
-    if(DimSize(positions,0)!=numpnts(allCycles) || DimSize(positions,1)!=2 || DimSize(positions,2)!=4)
+    if(!CVA_FitSwitchSelectionValid(nextCycle,nextSide,allCycles,counts,positions))
         return -1
     endif
     String suffix=num2istr(nextCycle+1)
@@ -1183,6 +1246,26 @@ Function CVA_ValidateFitSwitch(df,sourceFolder,nextCycle,nextSide,offset)
     if(!WaveExists(sourceE) || !WaveExists(sourceI))
         return -1
     endif
+    return CVA_FitSwitchRowsValid(sourceE,sourceI,counts,allLines,nextCycle,offset)
+End
+
+// Unlike source matching, a requested switch explicitly rejects nonfinite indices.
+Function CVA_FitSwitchSelectionValid(nextCycle,nextSide,allCycles,counts,positions)
+    Variable nextCycle,nextSide
+    Wave allCycles,counts,positions
+    if(numtype(nextCycle)!=0 || nextCycle!=floor(nextCycle) || nextCycle<0 || nextCycle>=numpnts(allCycles) || nextCycle>=numpnts(counts) || (nextSide!=1 && nextSide!=2))
+        return 0
+    endif
+    if(DimSize(positions,0)!=numpnts(allCycles) || DimSize(positions,1)!=2 || DimSize(positions,2)!=4)
+        return 0
+    endif
+    return 1
+End
+
+Function CVA_FitSwitchRowsValid(sourceE,sourceI,counts,allLines,nextCycle,offset)
+    Wave sourceE,sourceI,counts,allLines
+    Variable nextCycle
+    Variable &offset
     Variable n=numpnts(sourceE),i
     offset=0
     if(n<4 || numpnts(sourceI)!=n || counts[nextCycle]!=n)
@@ -1238,9 +1321,6 @@ Function CVA_RestoreFit(graph)
         resultName="CVA_red_"+num2istr(cycleIndex+1)
     endif
     Wave/Z saved=$(sourceFolder+resultName),snapshot=$(sourceFolder+resultName+"_data"),positions=$(sourceFolder+"CVA_fit_cursors"),x=$(df+"fitE"),y=$(df+"fitI"),lines=$(df+"fitLines")
-    if(!WaveExists(saved) || !WaveExists(snapshot) || !WaveExists(positions) || !WaveExists(x) || !WaveExists(y) || !WaveExists(lines))
-        return 0
-    endif
     if(!CVA_SavedFitMatches(saved,snapshot,positions,x,y,lines,cycleIndex,side))
         return 0
     endif
@@ -1254,8 +1334,23 @@ End
 
 // A complete finite snapshot and four exact saved cursor positions are required.
 Function CVA_SavedFitMatches(saved,snapshot,positions,x,y,lines,cycleIndex,side)
-    Wave saved,snapshot,positions,x,y,lines
+    Wave/Z saved,snapshot,positions,x,y,lines
     Variable cycleIndex,side
+    if(!WaveExists(saved) || !WaveExists(snapshot) || !WaveExists(positions) || !WaveExists(x) || !WaveExists(y) || !WaveExists(lines))
+        return 0
+    endif
+    if(!CVA_SavedFitValuesValid(saved,snapshot,x))
+        return 0
+    endif
+    if(!CVA_FitSnapshotMatches(snapshot,x,y,lines))
+        return 0
+    endif
+    return CVA_SavedCursorsMatch(saved,positions,x,cycleIndex,side)
+End
+
+// All eleven stored values must be finite, including the extrapolation flag.
+Function CVA_SavedFitValuesValid(saved,snapshot,x)
+    Wave saved,snapshot,x
     if(numpnts(saved)!=11 || DimSize(snapshot,0)!=numpnts(x) || DimSize(snapshot,1)!=3)
         return 0
     endif
@@ -1265,11 +1360,24 @@ Function CVA_SavedFitMatches(saved,snapshot,positions,x,y,lines,cycleIndex,side)
             return 0
         endif
     endfor
+    return 1
+End
+
+// Check all acquisition points, not just the selected ranges.
+Function CVA_FitSnapshotMatches(snapshot,x,y,lines)
+    Wave snapshot,x,y,lines
+    Variable i
     for(i=0;i<numpnts(x);i+=1)
         if(numtype(snapshot[i][0]+snapshot[i][1]+snapshot[i][2])!=0 || snapshot[i][0]!=x[i] || snapshot[i][1]!=y[i] || snapshot[i][2]!=lines[i])
             return 0
         endif
     endfor
+    return 1
+End
+
+Function CVA_SavedCursorsMatch(saved,positions,x,cycleIndex,side)
+    Wave saved,positions,x
+    Variable cycleIndex,side,i
     for(i=0;i<4;i+=1)
         if(saved[7+i]!=floor(saved[7+i]) || numtype(positions[cycleIndex][side-1][i])!=0 || saved[7+i]!=positions[cycleIndex][side-1][i] || saved[7+i]<0 || saved[7+i]>=numpnts(x))
             return 0

@@ -19,11 +19,53 @@ Function CVAT_Run()
     NewDataFolder/S $folder
     String testDF=GetDataFolder(1)
     CVAT_Math()
+    CVAT_DataRows()
+    CVAT_Charge(testDF)
     CVAT_State(testDF)
     CVAT_Editor(testDF)
     SetDataFolder $oldDF
     KillDataFolder $testDF
     Print "CV Analyzer native Igor regression checks passed."
+End
+
+Function CVAT_DataRows()
+    Variable t,e,current,cycle
+    String problem=CVA_ParseDataRow("1\t0.5\t-2\t3",12,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(strlen(problem)==0 && t==1 && e==0.5 && current==-2 && cycle==3,"numeric row allows equal time and cycle")
+    problem=CVA_ParseDataRow("2s\t0.5\t-2\t3",13,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(cmpstr(problem,"Invalid or missing required numeric value at line 13.")==0,"numeric prefix rejected with source line")
+    problem=CVA_ParseDataRow("2\t0.5\t-2",14,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(cmpstr(problem,"Invalid or missing required numeric value at line 14.")==0,"missing cycle rejected")
+    problem=CVA_ParseDataRow("2\t1e999\t-2\t3",15,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(cmpstr(problem,"Invalid or missing required numeric value at line 15.")==0,"nonfinite conversion rejected before ordering")
+    problem=CVA_ParseDataRow("0\t0.5\t-2\t3",16,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(cmpstr(problem,"Time or cycle number is out of order at line 16.")==0,"decreasing time rejected")
+    problem=CVA_ParseDataRow("2\t0.5\t-2\t2",17,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(cmpstr(problem,"Time or cycle number is out of order at line 17.")==0,"decreasing cycle rejected")
+    problem=CVA_ParseDataRow("2\t0.5\t-2\t3.5",18,0,1,2,3,1,3,t,e,current,cycle)
+    CVAT_Assert(cmpstr(problem,"Time or cycle number is out of order at line 18.")==0,"fractional cycle rejected")
+End
+
+Function CVAT_Charge(testDF)
+    String testDF
+    NewDataFolder/S charge
+    Make/D/N=2 time_s={0,3600},current_mA={2,4}
+    Make/D/N=1 Q_positive_mAh,Q_negative_mAh
+    CVA_SummarizeCharge(0,0,1)
+    CVAT_Assert(Q_positive_mAh[0]==3 && Q_negative_mAh[0]==0,"positive trapezoid charge")
+    current_mA={-2,-4}
+    CVA_SummarizeCharge(0,0,1)
+    CVAT_Assert(Q_positive_mAh[0]==0 && Q_negative_mAh[0]==-3,"negative trapezoid charge")
+    current_mA={2,-2}
+    CVA_SummarizeCharge(0,0,1)
+    CVAT_Assert(Q_positive_mAh[0]==0.5 && Q_negative_mAh[0]==-0.5,"positive-to-negative zero crossing")
+    current_mA={-2,2}
+    CVA_SummarizeCharge(0,0,1)
+    CVAT_Assert(Q_positive_mAh[0]==0.5 && Q_negative_mAh[0]==-0.5,"negative-to-positive zero crossing")
+    current_mA={0,0}
+    CVA_SummarizeCharge(0,0,1)
+    CVAT_Assert(Q_positive_mAh[0]==0 && Q_negative_mAh[0]==0,"zero current charge")
+    SetDataFolder $testDF
 End
 
 Function CVAT_Math()
@@ -100,6 +142,14 @@ Function CVAT_State(testDF)
     CVAT_Assert(EqualWaves(displayX,expectedX,1,0) && EqualWaves(displayAB,expectedAB,1,0) && EqualWaves(displayCD,expectedCD,1,0),"restoration reproduces calculated display waves")
     CVAT_Assert(cmpstr(note(displayY),expectedNote)==0,"restoration retains saved provenance")
     CVAT_Assert(ItemsInList(TraceNameList(graph,";",1))==4,"restoration draws each fit trace once")
+    CVAT_Assert(CVA_SavedFitMatches(ox,oxData,$(sourceDF+"CVA_fit_cursors"),fitE,fitI,fitLines,0,1),"saved result eligibility")
+    Variable originalSlope=ox[3]
+    ox[3]=NaN
+    CVAT_Assert(!CVA_SavedFitMatches(ox,oxData,$(sourceDF+"CVA_fit_cursors"),fitE,fitI,fitLines,0,1),"nonfinite saved coefficient blocks restoration")
+    ox[3]=originalSlope
+    oxData[5][2]+=1
+    CVAT_Assert(!CVA_SavedFitMatches(ox,oxData,$(sourceDF+"CVA_fit_cursors"),fitE,fitI,fitLines,0,1),"snapshot row outside selected cursors still checked")
+    oxData[5][2]-=1
     Wave/T table=$(sourceDF+"CVA_fit_table")
     String savedCell=table[0][1]
     Wave positions=$(sourceDF+"CVA_fit_cursors")
@@ -159,6 +209,13 @@ Function CVAT_Editor(testDF)
     Wave sourceE=$(sourceDF+"E_cycle_1"),sourceI=$(sourceDF+"I_cycle_1")
     NVAR lastCycle=$(sourceDF+"CVA_fit_last_cycle"),lastSide=$(sourceDF+"CVA_fit_last_side")
     lastCycle=1; lastSide=2
+    Wave/T table=$(sourceDF+"CVA_fit_table")
+    String savedCell=table[0][1]
+    Wave positions=$(sourceDF+"CVA_fit_cursors")
+    Redimension/N=(2,2,3) positions
+    CVAT_Assert(CVA_InitFitTable(sourceDF,$(sourceDF+"summary_cycle"))!=0,"malformed existing cursor table rejected")
+    CVAT_Assert(cmpstr(table[0][1],savedCell)==0,"failed table initialization preserves saved cell")
+    Redimension/N=(2,2,4) positions
     Display/K=1 sourceI vs sourceE as "CV Analyzer disposable source graph"
     String sourceGraph=S_name
     CVAT_Assert(WhichListItem(sourceGraph,CVA_FitGraphCandidates(WinList("*",";","WIN:1")))>=0,"source graph is a fit candidate")
