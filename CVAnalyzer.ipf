@@ -588,7 +588,9 @@ Function CVA_FitOpen()
     Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
     graph=S_name
     SetWindow $graph,userdata(fitDF)=fitDF
-    CVA_GraphAppearance(graph)
+    String fitLegend="\\s(fitI) "+CVA_Ordinal(allCycles[cycleIndex])
+    CVA_StyleGraph(graph,fitLegend)
+    CVA_ColorTrace(graph,"fitI",cycleIndex)
     CVA_PadGraphAxes(graph)
     ControlBar/W=$graph 74
     TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D を同じ走査枝に配置し、2 本の直線をフィットします。",fSize=11
