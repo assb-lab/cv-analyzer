@@ -1377,7 +1377,8 @@ End
 
 Function CVA_SavedCursorsMatch(saved,positions,x,cycleIndex,side)
     Wave saved,positions,x
-    Variable cycleIndex,side,i
+    Variable cycleIndex,side
+    Variable i
     for(i=0;i<4;i+=1)
         if(saved[7+i]!=floor(saved[7+i]) || numtype(positions[cycleIndex][side-1][i])!=0 || saved[7+i]!=positions[cycleIndex][side-1][i] || saved[7+i]<0 || saved[7+i]>=numpnts(x))
             return 0
