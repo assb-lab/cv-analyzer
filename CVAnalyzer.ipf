@@ -450,7 +450,7 @@ Function CVA_GraphAppearance(graphName)
     // Igor graph dimensions are points (72 points/inch), before expansion.
     ModifyGraph/W=$graphName mirror=1, tick=2, expand=2, gfSize=12, width=226.77165, height=170.07874, margin(left)=56, margin(bottom)=39, margin(right)=14, margin(top)=14
     ModifyGraph/W=$graphName manTick(bottom)={0,1,0,1},manMinor(bottom)={4,50}
-    Label/W=$graphName bottom "\\Z14Cell Voltage \\f02E\\f00\\Bwe\\M\\Z14 / V"
+    Label/W=$graphName bottom "\\Z14Cell Voltage \\f02V\\f00 / V"
     Label/W=$graphName left "\\Z14Current \\f02I\\f00 / mA"
 End
 
@@ -806,10 +806,7 @@ Function CVA_FitRun(graph,direction)
     AppendToGraph/W=$graph ly2 vs lx
     AppendToGraph/W=$graph iy vs ix
     ModifyGraph/W=$graph rgb(lineAB)=(65535,0,0),rgb(lineCD)=(0,0,65535),mode(intersectionY)=3,marker(intersectionY)=19
-    result=side+" 交点: E = "+num2str(xe)+" V, I = "+num2str(ye)+" mA"
-    if(extrap)
-        result+="\r交点は少なくとも一方の範囲外（外挿）です。"
-    endif
+    result=CVA_FitLabel(direction,xe)
     TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
     valid=1
     return 0
@@ -1040,14 +1037,18 @@ Function CVA_RestoreFit(graph)
     AppendToGraph/W=$graph ly2 vs lx
     AppendToGraph/W=$graph iy vs ix
     ModifyGraph/W=$graph rgb(lineAB)=(65535,0,0),rgb(lineCD)=(0,0,65535),mode(intersectionY)=3,marker(intersectionY)=19
-    result="Oxidation 交点: E = "+num2str(xe)+" V, I = "+num2str(ye)+" mA"
-    if(side==2)
-        result="Reduction 交点: E = "+num2str(xe)+" V, I = "+num2str(ye)+" mA"
-    endif
-    if(extrap)
-        result+="\r交点は少なくとも一方の範囲外（外挿）です。"
-    endif
+    result=CVA_FitLabel(side,xe)
     TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
     valid=1
     return 0
+End
+
+// Italic voltage symbol, upright subscript and unit.
+Function/S CVA_FitLabel(side,voltage)
+    Variable side,voltage
+    String subscript="ox."
+    if(side==2)
+        subscript="red."
+    endif
+    return "\\Z14\\f02V\\f00\\B"+subscript+"\\M\\Z14 = "+num2str(voltage)+" V"
 End
