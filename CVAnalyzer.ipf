@@ -15,7 +15,7 @@ Function CVA_OpenPanel()
         return 0
     endif
     Variable/G root:Packages:CVAnalyzer:mode = 1
-    NewPanel/N=CVA_Panel/W=(20,50,385,510) as "CV Analyzer"
+    NewPanel/N=CVA_Panel/W=(20,50,385,595) as "CV Analyzer"
     TitleBox heading,pos={20,15},size={325,30},frame=0,title="CV Analyzer"
     TitleBox heading,fSize=20,fStyle=1,fColor=(6500,14000,29000)
     TitleBox version,pos={286,23},frame=0,title="v0.0.1",fSize=11,fColor=(24000,27000,32000)
@@ -32,10 +32,13 @@ Function CVA_OpenPanel()
     TitleBox out1,pos={30,246},frame=0,title="・CV 曲線をサイクルごとに色分け",fSize=11
     TitleBox out2,pos={30,267},frame=0,title="・電位範囲・電流極値・電荷量を表に表示",fSize=11
     TitleBox out3,pos={30,288},frame=0,title="・元ファイルと行番号を wave Note に記録",fSize=11
-    GroupBox notesGroup,pos={15,332},size={335,108},title="解析について",fSize=12,fStyle=1
-    TitleBox note1,pos={30,358},frame=0,title="電位・電流は測定値を使用し、補正しません。",fSize=11
-    TitleBox note2,pos={30,379},frame=0,title="電荷量は電流の正負別に時間積分します。",fSize=11
-    TitleBox note3,pos={30,400},frame=0,title="stepwise は測定条件の確定後に対応予定です。",fSize=11
+    GroupBox fitGroup,pos={15,332},size={335,78},title="3  解析",fSize=12,fStyle=1
+    Button fitOpen,pos={30,355},size={230,25},title="2接線フィッティングを開く",proc=CVA_FitOpenButton,fSize=12
+    TitleBox fitInfo,pos={30,384},frame=0,title="対象グラフとサイクルを選択します。",fSize=11
+    GroupBox notesGroup,pos={15,422},size={335,108},title="解析について",fSize=12,fStyle=1
+    TitleBox note1,pos={30,448},frame=0,title="電位・電流は測定値を使用し、補正しません。",fSize=11
+    TitleBox note2,pos={30,469},frame=0,title="電荷量は電流の正負別に時間積分します。",fSize=11
+    TitleBox note3,pos={30,490},frame=0,title="stepwise は測定条件の確定後に対応予定です。",fSize=11
     return 0
 End
 
@@ -442,13 +445,18 @@ Function CVA_AnnotateWaves(commonNote)
     endfor
 End
 
-Function CVA_StyleGraph(graphName,legendText)
-    String graphName,legendText
+Function CVA_GraphAppearance(graphName)
+    String graphName
     // Igor graph dimensions are points (72 points/inch), before expansion.
     ModifyGraph/W=$graphName mirror=1, tick=2, expand=2, gfSize=12, width=226.77165, height=170.07874, margin(left)=56, margin(bottom)=39, margin(right)=14, margin(top)=14
     ModifyGraph/W=$graphName manTick(bottom)={0,1,0,1},manMinor(bottom)={4,50}
     Label/W=$graphName bottom "\\Z14Cell Voltage \\f02E\\f00\\Bwe\\M\\Z14 / V"
     Label/W=$graphName left "\\Z14Current \\f02I\\f00 / mA"
+End
+
+Function CVA_StyleGraph(graphName,legendText)
+    String graphName,legendText
+    CVA_GraphAppearance(graphName)
     Legend/W=$graphName/C/N=text0/F=0/B=1/A=RB legendText
 End
 
@@ -473,7 +481,7 @@ End
 Function CVA_ShowSummary()
     Wave summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s
     String tableName
-    Edit/K=1/W=(20,530,385,770) summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s as "CV cycle summary"
+    Edit/K=1/W=(20,615,385,855) summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s as "CV cycle summary"
     tableName=S_name
     ModifyTable/W=$tableName size=12
 End
@@ -502,23 +510,33 @@ Function CVA_IsNumber(token)
 End
 
 // Two-line intersection tool: operates on a copy of one existing cycle trace.
-Menu "Macros"
-    "CV: 2接線交点フィット", CVA_FitOpen()
+Function CVA_FitOpenButton(ctrlName) : ButtonControl
+    String ctrlName
+    CVA_FitOpen()
+    return 0
 End
 
 Function CVA_FitOpen()
-    String sourceGraph=WinName(0,1), traces, selection, sourceDF, fitDF, folder, graph
-    Variable choice=1, n, firstTurn, secondTurn
-    if (strlen(sourceGraph)==0)
-        DoAlert 0, "先に CV グラフを開いてください。"
+    String sourceGraph,graphs=WinList("*",";","WIN:1"),candidates="",traces,selection,sourceDF,fitDF,folder,graph
+    Variable graphChoice=1,choice=1,n,i
+    for(i=0;i<ItemsInList(graphs);i+=1)
+        graph=StringFromList(i,graphs)
+        traces=GrepList(TraceNameList(graph,";",1),"^I_cycle_[0-9]+$")
+        if(ItemsInList(traces)>0)
+            candidates+=graph+";"
+        endif
+    endfor
+    if(ItemsInList(candidates)==0)
+        DoAlert 0,"先に CV データを読み込んでグラフを作成してください。"
         return -1
     endif
-    traces=TraceNameList(sourceGraph,";",1)
-    traces=GrepList(traces,"^I_cycle_[0-9]+$")
-    if (ItemsInList(traces)==0)
-        DoAlert 0, "CV Analyzer のサイクル波形を含むグラフを選択してください。"
-        return -1
+    Prompt graphChoice,"対象グラフ",popup,candidates
+    DoPrompt "フィットする CV グラフを選択",graphChoice
+    if(V_flag)
+        return 0
     endif
+    sourceGraph=StringFromList(graphChoice-1,candidates)
+    traces=GrepList(TraceNameList(sourceGraph,";",1),"^I_cycle_[0-9]+$")
     Prompt choice,"対象サイクル",popup,traces
     DoPrompt "フィットするサイクルを選択",choice
     if (V_flag)
@@ -537,7 +555,7 @@ Function CVA_FitOpen()
     Wave/Z allCycles=$(sourceDF+"summary_cycle")
     Wave/Z counts=$(sourceDF+"points")
     SVAR/Z sourceFilename=$(sourceDF+"source_filename")
-    Variable cycleIndex=str2num(suffix)-1,offset=0,i
+    Variable cycleIndex=str2num(suffix)-1,offset=0
     if (!WaveExists(sourceE) || !WaveExists(sourceLines) || !WaveExists(allCycles) || !WaveExists(counts) || !SVAR_Exists(sourceFilename))
         DoAlert 0, "元の電位・行番号・サイクル情報が見つかりません。"
         return -1
@@ -567,14 +585,11 @@ Function CVA_FitOpen()
     String/G source_file=sourceFilename
     Variable/G source_cycle=allCycles[cycleIndex], valid=0
     Wave fitI,fitE,fitLines
-    CVA_FitTurns(fitE,firstTurn,secondTurn)
-    Variable/G turnA=firstTurn, turnB=secondTurn
     Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
     graph=S_name
     SetWindow $graph,userdata(fitDF)=fitDF
-    ModifyGraph/W=$graph mirror=1,tick=2,gfSize=12
-    Label/W=$graph bottom "\\Z14Cell Voltage \\f02E\\f00\\Bwe\\M\\Z14 / V"
-    Label/W=$graph left "\\Z14Current \\f02I\\f00 / mA"
+    CVA_GraphAppearance(graph)
+    CVA_PadGraphAxes(graph)
     ControlBar/W=$graph 74
     TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D を同じ走査枝に配置し、2 本の直線をフィットします。",fSize=11
     TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="交点は選択範囲に依存します。カーソル移動後は再計算してください。",fSize=11
@@ -589,31 +604,35 @@ Function CVA_FitOpen()
     return 0
 End
 
-// Cycle extrema delimit the up-to-three contiguous branches of a normal CV.
-Function CVA_FitTurns(x,firstTurn,secondTurn)
+// Conservative branch check: no reversal of measured potential anywhere
+// between the first and last selected points; flat steps are allowed.
+Function CVA_FitSameBranch(x,lo,hi)
     Wave x
-    Variable &firstTurn,&secondTurn
-    Variable i,imin=0,imax=0
-    for(i=1;i<numpnts(x);i+=1)
-        if(x[i]<x[imin])
-            imin=i
+    Variable lo,hi
+    Variable i,direction=0,delta
+    if(lo<0 || hi>=numpnts(x) || hi<=lo)
+        return 0
+    endif
+    for(i=lo;i<=hi;i+=1)
+        if(numtype(x[i])!=0)
+            return 0
         endif
-        if(x[i]>x[imax])
-            imax=i
+        if(i>lo)
+            delta=x[i]-x[i-1]
+            if(delta>0)
+                if(direction<0)
+                    return 0
+                endif
+                direction=1
+            elseif(delta<0)
+                if(direction>0)
+                    return 0
+                endif
+                direction=-1
+            endif
         endif
     endfor
-    firstTurn=min(imin,imax)
-    secondTurn=max(imin,imax)
-End
-
-Function CVA_FitBranch(point,firstTurn,secondTurn)
-    Variable point,firstTurn,secondTurn
-    if(point<firstTurn)
-        return 0
-    elseif(point<secondTurn)
-        return 1
-    endif
-    return 2
+    return direction!=0
 End
 
 Function CVA_FitHook(s)
@@ -682,11 +701,11 @@ Function CVA_FitRun(graph)
     String graph
     String df=GetUserData(graph,"","fitDF"), names="A;B;C;D", info, trace, provenance, result
     Wave/Z x=$(df+"fitE"), y=$(df+"fitI"), lines=$(df+"fitLines")
-    NVAR/Z turnA=$(df+"turnA"),turnB=$(df+"turnB"),valid=$(df+"valid"),cyc=$(df+"source_cycle")
+    NVAR/Z valid=$(df+"valid"),cyc=$(df+"source_cycle")
     SVAR/Z filename=$(df+"source_file")
-    Variable i,pA,pB,pC,pD,a,b,c,d,m1,b1,m2,b2,xe,ye,branch,extrap
+    Variable i,pA,pB,pC,pD,a,b,c,d,m1,b1,m2,b2,xe,ye,extrap
     CVA_FitInvalidate(graph)
-    if(!WaveExists(x) || !WaveExists(y) || !WaveExists(lines) || !NVAR_Exists(turnA) || !NVAR_Exists(turnB) || !NVAR_Exists(valid) || !NVAR_Exists(cyc) || !SVAR_Exists(filename))
+    if(!WaveExists(x) || !WaveExists(y) || !WaveExists(lines) || !NVAR_Exists(valid) || !NVAR_Exists(cyc) || !SVAR_Exists(filename))
         DoAlert 0,"フィット用データが見つかりません。"
         return -1
     endif
@@ -694,7 +713,7 @@ Function CVA_FitRun(graph)
         String cursorName=StringFromList(i,names)
         info=CsrInfo($cursorName,graph)
         trace=StringByKey("TNAME",info)
-        if(strlen(info)==0 || cmpstr(trace,"fitI")!=0)
+        if(strlen(info)==0 || cmpstr(trace,"fitI")!=0 || NumberByKey("ISFREE",info)!=0)
             DoAlert 0,"カーソル A–D をすべて実測曲線に配置してください。"
             return -1
         endif
@@ -709,9 +728,8 @@ Function CVA_FitRun(graph)
         DoAlert 0,"カーソル範囲がデータの外にあります。"
         return -1
     endif
-    branch=CVA_FitBranch(a,turnA,turnB)
-    if(CVA_FitBranch(b,turnA,turnB)!=branch || CVA_FitBranch(c,turnA,turnB)!=branch || CVA_FitBranch(d,turnA,turnB)!=branch)
-        DoAlert 0,"2 つの範囲を同じ走査枝に配置してください。折り返し点をまたぐ範囲は使用できません。"
+    if(!CVA_FitSameBranch(x,min(a,c),max(b,d)))
+        DoAlert 0,"2つの範囲の間に電位の反転があります。同じ走査枝を選択してください。測定ノイズによる微小反転も拒否します。"
         return -1
     endif
     if(CVA_FitLine(x,y,a,b,m1,b1)!=0 || CVA_FitLine(x,y,c,d,m2,b2)!=0)
