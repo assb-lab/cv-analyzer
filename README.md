@@ -2,7 +2,7 @@
 
 BioLogic EC-Lab の通常 CV データ（`.mpt`）を読み込み、サイクルごとの電流–電位曲線と集計表を作る Igor Pro マクロです。選択した 2 範囲への直線フィットと、その交点電位の保存にも対応しています。
 
-**バージョン：0.0.1 ／ 対象：Igor Pro 8 以降**
+**バージョン：0.1.1 ／ 対象：Igor Pro 8 以降**
 
 
 ## 導入と起動
@@ -15,7 +15,7 @@ BioLogic EC-Lab の通常 CV データ（`.mpt`）を読み込み、サイクル
 ./scripts/install_igor_alias.sh
 ```
 
-[導入スクリプト](scripts/install_igor_alias.sh) は、`CVAnalyzer.ipf` のバージョンコメントから名前を付けた Finder エイリアス（現在は `CVAnalyzer_v_0_0_1.ipf`）を、次の Igor Procedures フォルダに作成します。
+[導入スクリプト](scripts/install_igor_alias.sh) は、`CVAnalyzer.ipf` のバージョンコメントから名前を付けた Finder エイリアス（現在は `CVAnalyzer_v_0_1_1.ipf`）を、次の Igor Procedures フォルダに作成します。
 
 ```text
 ~/Documents/WaveMetrics/Igor Pro 8 User Files/Igor Procedures
@@ -145,7 +145,7 @@ EC-Lab ASCII の Cyclic Voltammetry ファイルを対象に、次の列を読�
 2. `CVAnalyzer.ipf` と `tests/CVAnalyzerTests.ipf` を読み込み、コンパイルします。
 3. `CVAT_Run()` を実行します。
 
-合成データを使い、正方向・逆方向の直線と既知の交点、点数・電位幅不足、非有限値、微小反転、カーソルの保存・復元、酸化・還元の結果保持、元データ・元行番号変更後の無効化、実測範囲外の交点の表示を検査する手順です。失敗時は原因を表示して停止するため、確認用フォルダが残る場合があります。
+合成データを使い、正方向・逆方向の直線と既知の交点、点数・電位幅不足、非有限値、微小反転、カーソルの保存・復元、酸化・還元の結果保持、元データ・元行番号変更後の無効化、実測範囲外の交点の表示を検査する手順です。計算時と復元時の描画 wave・出典の一致、失敗した切り替えでの状態保持、画面作成後のデータフォルダ復元と既存画面の前面表示も確認します。失敗時は原因を表示して停止するため、確認用フォルダが残る場合があります。
 
 
 ## ライセンス

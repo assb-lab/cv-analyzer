@@ -1,6 +1,6 @@
 #pragma rtGlobals=3
-#pragma version=0.001
-// Semantic version: 0.0.1 (Igor pragma uses a numeric version).
+#pragma version=0.101
+// Semantic version: 0.1.1 (Igor pragma uses a numeric version).
 
 // BioLogic EC-Lab cyclic voltammetry viewer. Igor Pro 8 or later.
 Menu "Macros"
@@ -18,7 +18,7 @@ Function CVA_OpenPanel()
     NewPanel/N=CVA_Panel/W=(20,50,385,595) as "CV Analyzer"
     TitleBox heading,pos={20,15},size={325,30},frame=0,title="CV Analyzer"
     TitleBox heading,fSize=20,fStyle=1,fColor=(6500,14000,29000)
-    TitleBox version,pos={286,23},frame=0,title="v0.0.1",fSize=11,fColor=(24000,27000,32000)
+    TitleBox version,pos={286,23},frame=0,title="v0.1.1",fSize=11,fColor=(24000,27000,32000)
     TitleBox subtitle,pos={20,48},size={325,20},frame=0,title="BioLogic EC-Lab  •  サイクリックボルタンメトリー"
     TitleBox subtitle,fSize=11,fColor=(24000,27000,32000)
     GroupBox inputGroup,pos={15,78},size={335,130},title="1  測定方法とファイル",fSize=12,fStyle=1
@@ -516,9 +516,11 @@ Function CVA_FitOpenButton(ctrlName) : ButtonControl
     return 0
 End
 
-Function CVA_FitOpen()
-    String sourceGraph,graphs=WinList("*",";","WIN:1"),candidates="",traces,selection,sourceDF,fitDF,folder,graph
-    Variable graphChoice=1,n,i
+// Candidate order follows the existing graph and trace lists.
+Function/S CVA_FitGraphCandidates(graphs)
+    String graphs
+    String candidates="",graph,traces
+    Variable i
     for(i=0;i<ItemsInList(graphs);i+=1)
         graph=StringFromList(i,graphs)
         traces=GrepList(TraceNameList(graph,";",1),"^I_cycle_[0-9]+$")
@@ -526,6 +528,34 @@ Function CVA_FitOpen()
             candidates+=graph+";"
         endif
     endfor
+    return candidates
+End
+
+// Return true after bringing the dataset's existing editor to the front.
+Function CVA_ActivateFitEditor(graphs,sourceDF)
+    String graphs,sourceDF
+    String graph,fitDF
+    Variable i
+    for(i=0;i<ItemsInList(graphs);i+=1)
+        graph=StringFromList(i,graphs)
+        fitDF=GetUserData(graph,"","fitDF")
+        if(strlen(fitDF)>0)
+            SVAR/Z openSource=$(fitDF+"source_folder")
+            if(SVAR_Exists(openSource))
+                if(cmpstr(openSource,sourceDF)==0)
+                    DoWindow/F $graph
+                    return 1
+                endif
+            endif
+        endif
+    endfor
+    return 0
+End
+
+Function CVA_FitOpen()
+    String graphs=WinList("*",";","WIN:1"),candidates=CVA_FitGraphCandidates(graphs)
+    String sourceGraph,traces,selection,sourceDF
+    Variable graphChoice=1
     if(ItemsInList(candidates)==0)
         DoAlert 0,"先に CV データを読み込んでグラフを作成してください。"
         return -1
@@ -547,19 +577,18 @@ Function CVA_FitOpen()
     sourceDF=GetWavesDataFolder(sourceI,1)
     // A dataset has one editor: independent windows must not overwrite each
     // other's shared cursor/result state.
-    for(i=0;i<ItemsInList(graphs);i+=1)
-        graph=StringFromList(i,graphs)
-        fitDF=GetUserData(graph,"","fitDF")
-        if(strlen(fitDF)>0)
-            SVAR/Z openSource=$(fitDF+"source_folder")
-            if(SVAR_Exists(openSource))
-                if(cmpstr(openSource,sourceDF)==0)
-                    DoWindow/F $graph
-                    return 0
-                endif
-            endif
-        endif
-    endfor
+    if(CVA_ActivateFitEditor(graphs,sourceDF))
+        return 0
+    endif
+    return CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
+End
+
+// Validate and prepare the scratch folder before building its graph.
+Function CVA_CreateFitEditor(sourceGraph,selection,sourceDF)
+    String sourceGraph,selection,sourceDF
+    String fitDF,folder,graph
+    Variable n,i
+    Wave sourceI=TraceNameToWaveRef(sourceGraph,selection)
     String suffix=selection[strlen("I_cycle_"),inf]
     Wave/Z sourceE=$(sourceDF+"E_cycle_"+suffix)
     Wave/Z sourceLines=$(sourceDF+"source_line")
@@ -614,6 +643,20 @@ Function CVA_FitOpen()
     CVA_FitStyle(graph,allCycles[cycleIndex])
     CVA_ColorTrace(graph,"fitI",cycleIndex)
     CVA_PadGraphAxes(graph)
+    CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
+    SetWindow $graph,hook(CVAFit)=CVA_FitHook
+    CVA_SwitchFit(graph,initialCycle,initialSide)
+    CVA_PlaceFitBelow(sourceGraph,graph)
+    SetDataFolder $oldDF
+    return 0
+End
+
+// Keep the fitting control layout independent of scratch-data preparation.
+Function CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
+    String graph,sourceDF
+    Wave allCycles
+    Variable initialCycle,initialSide
+    Variable i
     ControlBar/W=$graph 232
     TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D を同じ走査枝に配置し、2 本の直線をフィットします。",fSize=11
     TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="結果は選択範囲に依存します。酸化・還元は手動で選択します。",fSize=11
@@ -629,11 +672,6 @@ Function CVA_FitOpen()
     Wave/T fitTable=$(sourceDF+"CVA_fit_table"),fitTitles=$(sourceDF+"CVA_fit_titles")
     ListBox fitTableView,win=$graph,pos={10,98},size={340,120},listWave=fitTable,titleWave=fitTitles,mode=1,fSize=11,widths={75,110,110}
     ShowInfo/W=$graph/CP={0,1}
-    SetWindow $graph,hook(CVAFit)=CVA_FitHook
-    CVA_SwitchFit(graph,initialCycle,initialSide)
-    CVA_PlaceFitBelow(sourceGraph,graph)
-    SetDataFolder $oldDF
-    return 0
 End
 
 // The fitting graph shows the cycle as an annotation, without a trace legend.
@@ -764,6 +802,13 @@ Function CVA_FitSourceMatches(graph)
     if(cyc!=cycles[cycleIndex] || counts[cycleIndex]!=numpnts(x) || numpnts(lines)!=numpnts(x) || !EqualWaves(x,sourceE,1,0) || !EqualWaves(y,sourceI,1,0))
         return 0
     endif
+    return CVA_FitLinesMatch(lines,counts,allLines,cycleIndex)
+End
+
+// Compare the selected cycle's original file rows with the isolated copy.
+Function CVA_FitLinesMatch(lines,counts,allLines,cycleIndex)
+    Wave lines,counts,allLines
+    Variable cycleIndex
     Variable i,offset=0
     for(i=0;i<cycleIndex;i+=1)
         if(numtype(counts[i])!=0 || counts[i]<0 || counts[i]!=floor(counts[i]))
@@ -812,11 +857,11 @@ End
 Function CVA_FitRun(graph,direction)
     String graph
     Variable direction
-    String df=GetUserData(graph,"","fitDF"), names="A;B;C;D", info, trace, provenance, result
+    String df=GetUserData(graph,"","fitDF"),provenance
     Wave/Z x=$(df+"fitE"), y=$(df+"fitI"), lines=$(df+"fitLines")
     NVAR/Z valid=$(df+"valid"),cyc=$(df+"source_cycle"),cycleIndex=$(df+"source_index")
     SVAR/Z filename=$(df+"source_file"),sourceFolder=$(df+"source_folder")
-    Variable i,pA,pB,pC,pD,a,b,c,d,m1,b1,m2,b2,xe,ye,extrap
+    Variable pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap
     CVA_FitInvalidate(graph)
     if(!WaveExists(x) || !WaveExists(y) || !WaveExists(lines) || !NVAR_Exists(valid) || !NVAR_Exists(cyc) || !NVAR_Exists(cycleIndex) || !SVAR_Exists(filename) || !SVAR_Exists(sourceFolder))
         DoAlert 0,"フィット用データが見つかりません。"
@@ -827,6 +872,29 @@ Function CVA_FitRun(graph,direction)
         DoAlert 0,"元データが変更されています。サイクルを選び直してから再計算してください。"
         return -1
     endif
+    if(CVA_ReadFitCursors(graph,pA,pB,pC,pD)!=0)
+        return -1
+    endif
+    if(CVA_CalculateFit(x,y,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)!=0)
+        return -1
+    endif
+    provenance=CVA_FitProvenance(filename,cyc,direction,x,y,lines,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)
+    CVA_BuildFitDisplay(df,x,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,provenance)
+    if(CVA_SaveFitResult(sourceFolder,cycleIndex,direction,xe,ye,extrap,m1,b1,m2,b2,pA,pB,pC,pD,provenance,x,y,lines)!=0)
+        DoAlert 0,"結果表を更新できません。保存済み結果は変更していません。"
+        return -1
+    endif
+    CVA_ShowFitDisplay(graph,direction,xe)
+    valid=1
+    return 0
+End
+
+// Validate attached measured-point cursors before reading their indices.
+Function CVA_ReadFitCursors(graph,pA,pB,pC,pD)
+    String graph
+    Variable &pA,&pB,&pC,&pD
+    String names="A;B;C;D",info,trace
+    Variable i
     for(i=0;i<4;i+=1)
         String cursorName=StringFromList(i,names)
         info=CsrInfo($cursorName,graph)
@@ -841,6 +909,15 @@ Function CVA_FitRun(graph,direction)
         DoAlert 0,"カーソルをデータ点上に配置してください。"
         return -1
     endif
+    return 0
+End
+
+// Preserve the branch check, centered OLS, parallel threshold and extrapolation rules.
+Function CVA_CalculateFit(x,y,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)
+    Wave x,y
+    Variable pA,pB,pC,pD
+    Variable &m1,&b1,&m2,&b2,&xe,&ye,&extrap
+    Variable a,b,c,d
     a=min(pA,pB); b=max(pA,pB); c=min(pC,pD); d=max(pC,pD)
     if(a<0 || c<0 || b>=numpnts(x) || d>=numpnts(x))
         DoAlert 0,"カーソル範囲がデータの外にあります。"
@@ -864,11 +941,14 @@ Function CVA_FitRun(graph,direction)
         return -1
     endif
     extrap=(xe<min(x[a],x[b]) || xe>max(x[a],x[b]) || xe<min(x[c],x[d]) || xe>max(x[c],x[d]))
-    Make/O/D/N=2 $(df+"lineX"),$(df+"lineAB"),$(df+"lineCD")
-    Make/O/D/N=1 $(df+"intersectionX"),$(df+"intersectionY")
-    Wave lx=$(df+"lineX"),ly1=$(df+"lineAB"),ly2=$(df+"lineCD"),ix=$(df+"intersectionX"),iy=$(df+"intersectionY")
-    lx[0]=min(min(x[a],x[b]),min(min(x[c],x[d]),xe)); lx[1]=max(max(x[a],x[b]),max(max(x[c],x[d]),xe))
-    ly1=m1*lx+b1; ly2=m2*lx+b2; ix[0]=xe; iy[0]=ye
+    return 0
+End
+
+Function/S CVA_FitProvenance(filename,cyc,direction,x,y,lines,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)
+    String filename
+    Wave x,y,lines
+    Variable cyc,direction,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap
+    String provenance
     sprintf provenance, "AB slope (mA/V): %.17g\rAB intercept (mA): %.17g\rCD slope (mA/V): %.17g\rCD intercept (mA): %.17g\rIntersection E (V): %.17g\rIntersection I (mA): %.17g\r",m1,b1,m2,b2,xe,ye
     String cursorDetails
     sprintf cursorDetails,"A point (0-based): %d; E (V): %.17g; I (mA): %.17g\rB point (0-based): %d; E (V): %.17g; I (mA): %.17g\rC point (0-based): %d; E (V): %.17g; I (mA): %.17g\rD point (0-based): %d; E (V): %.17g; I (mA): %.17g\r",pA,x[pA],y[pA],pB,x[pB],y[pB],pC,x[pC],y[pC],pD,x[pD],y[pD]
@@ -877,12 +957,29 @@ Function CVA_FitRun(graph,direction)
         side="Reduction"
     endif
     provenance="File: "+filename+"\rCycle: "+num2str(cyc)+"\rSide selected: "+side+"\rA line: "+num2istr(lines[pA])+"\rB line: "+num2istr(lines[pB])+"\rC line: "+num2istr(lines[pC])+"\rD line: "+num2istr(lines[pD])+"\r"+cursorDetails+provenance+"Extrapolated: "+num2istr(extrap)+"\rEstimate depends on selected ranges. Side is user-selected; reference electrode is not inferred.\r"
+    return provenance
+End
+
+// Prepare display waves before saving. A save failure must not append traces.
+Function CVA_BuildFitDisplay(df,x,a,b,c,d,m1,b1,m2,b2,xe,ye,provenance)
+    String df,provenance
+    Wave x
+    Variable a,b,c,d,m1,b1,m2,b2,xe,ye
+    Make/O/D/N=2 $(df+"lineX"),$(df+"lineAB"),$(df+"lineCD")
+    Make/O/D/N=1 $(df+"intersectionX"),$(df+"intersectionY")
+    Wave lx=$(df+"lineX"),ly1=$(df+"lineAB"),ly2=$(df+"lineCD"),ix=$(df+"intersectionX"),iy=$(df+"intersectionY")
+    lx[0]=min(min(x[a],x[b]),min(min(x[c],x[d]),xe)); lx[1]=max(max(x[a],x[b]),max(max(x[c],x[d]),xe))
+    ly1=m1*lx+b1; ly2=m2*lx+b2; ix[0]=xe; iy[0]=ye
     Note/K iy
     Note iy,provenance
-    if(CVA_SaveFitResult(sourceFolder,cycleIndex,direction,xe,ye,extrap,m1,b1,m2,b2,pA,pB,pC,pD,provenance,x,y,lines)!=0)
-        DoAlert 0,"結果表を更新できません。保存済み結果は変更していません。"
-        return -1
-    endif
+End
+
+// Calculation and saved-result restoration share all trace/annotation styling.
+Function CVA_ShowFitDisplay(graph,direction,xe)
+    String graph
+    Variable direction,xe
+    String df=GetUserData(graph,"","fitDF"),result
+    Wave lx=$(df+"lineX"),ly1=$(df+"lineAB"),ly2=$(df+"lineCD"),ix=$(df+"intersectionX"),iy=$(df+"intersectionY")
     AppendToGraph/W=$graph ly1 vs lx
     AppendToGraph/W=$graph ly2 vs lx
     AppendToGraph/W=$graph iy vs ix
@@ -890,8 +987,6 @@ Function CVA_FitRun(graph,direction)
     result=CVA_FitLabel(direction,xe)
     TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
     CVA_PadGraphAxes(graph)
-    valid=1
-    return 0
 End
 
 // One read-only table per imported dataset; rows follow summary_cycle order.
@@ -1031,12 +1126,46 @@ End
 Function CVA_SwitchFit(graph,nextCycle,nextSide)
     String graph
     Variable nextCycle,nextSide
-    String df=GetUserData(graph,"","fitDF"),names="A;B;C;D",cursorName,info
+    String df=GetUserData(graph,"","fitDF")
     SVAR/Z sourceFolder=$(df+"source_folder")
     NVAR/Z cycleIndex=$(df+"source_index"),side=$(df+"selected_side"),cyc=$(df+"source_cycle"),switching=$(df+"switching"),initialized=$(df+"initialized")
     if(!SVAR_Exists(sourceFolder) || !NVAR_Exists(cycleIndex) || !NVAR_Exists(side) || !NVAR_Exists(cyc) || !NVAR_Exists(switching) || !NVAR_Exists(initialized))
         return -1
     endif
+    Variable offset
+    if(CVA_ValidateFitSwitch(df,sourceFolder,nextCycle,nextSide,offset)!=0)
+        return -1
+    endif
+    Wave allCycles=$(sourceFolder+"summary_cycle"),allLines=$(sourceFolder+"source_line"),positions=$(sourceFolder+"CVA_fit_cursors")
+    Wave x=$(df+"fitE"),y=$(df+"fitI"),lines=$(df+"fitLines")
+    String suffix=num2istr(nextCycle+1)
+    Wave sourceE=$(sourceFolder+"E_cycle_"+suffix),sourceI=$(sourceFolder+"I_cycle_"+suffix)
+    Variable n=numpnts(sourceE)
+    if(initialized)
+        CVA_StoreCursors(graph)
+    endif
+    switching=1
+    CVA_FitInvalidate(graph)
+    Redimension/N=(n) x,y,lines
+    x=sourceE[p]; y=sourceI[p]; lines=allLines[p+offset]
+    cycleIndex=nextCycle; side=nextSide; cyc=allCycles[nextCycle]
+    NVAR lastCycle=$(sourceFolder+"CVA_fit_last_cycle"),lastSide=$(sourceFolder+"CVA_fit_last_side")
+    lastCycle=nextCycle; lastSide=nextSide
+    CVA_FitStyle(graph,cyc)
+    CVA_ColorTrace(graph,"fitI",nextCycle)
+    CVA_PadGraphAxes(graph)
+    CVA_RestoreFitCursors(graph,positions,nextCycle,nextSide,n)
+    initialized=1
+    CVA_RestoreFit(graph)
+    switching=0
+    return 0
+End
+
+// Preflight must finish before storing cursors or mutating the active editor.
+Function CVA_ValidateFitSwitch(df,sourceFolder,nextCycle,nextSide,offset)
+    String df,sourceFolder
+    Variable nextCycle,nextSide
+    Variable &offset
     Wave/Z allCycles=$(sourceFolder+"summary_cycle"),counts=$(sourceFolder+"points"),allLines=$(sourceFolder+"source_line")
     Wave/Z positions=$(sourceFolder+"CVA_fit_cursors")
     Wave/Z x=$(df+"fitE"),y=$(df+"fitI"),lines=$(df+"fitLines")
@@ -1054,7 +1183,8 @@ Function CVA_SwitchFit(graph,nextCycle,nextSide)
     if(!WaveExists(sourceE) || !WaveExists(sourceI))
         return -1
     endif
-    Variable n=numpnts(sourceE),offset=0,i,point
+    Variable n=numpnts(sourceE),i
+    offset=0
     if(n<4 || numpnts(sourceI)!=n || counts[nextCycle]!=n)
         return -1
     endif
@@ -1067,19 +1197,15 @@ Function CVA_SwitchFit(graph,nextCycle,nextSide)
     if(offset+n>numpnts(allLines))
         return -1
     endif
-    if(initialized)
-        CVA_StoreCursors(graph)
-    endif
-    switching=1
-    CVA_FitInvalidate(graph)
-    Redimension/N=(n) x,y,lines
-    x=sourceE[p]; y=sourceI[p]; lines=allLines[p+offset]
-    cycleIndex=nextCycle; side=nextSide; cyc=allCycles[nextCycle]
-    NVAR lastCycle=$(sourceFolder+"CVA_fit_last_cycle"),lastSide=$(sourceFolder+"CVA_fit_last_side")
-    lastCycle=nextCycle; lastSide=nextSide
-    CVA_FitStyle(graph,cyc)
-    CVA_ColorTrace(graph,"fitI",nextCycle)
-    CVA_PadGraphAxes(graph)
+    return 0
+End
+
+Function CVA_RestoreFitCursors(graph,positions,nextCycle,nextSide,n)
+    String graph
+    Wave positions
+    Variable nextCycle,nextSide,n
+    String names="A;B;C;D",cursorName,info
+    Variable i,point
     for(i=0;i<4;i+=1)
         cursorName=StringFromList(i,names)
         point=positions[nextCycle][nextSide-1][i]
@@ -1096,16 +1222,12 @@ Function CVA_SwitchFit(graph,nextCycle,nextSide)
             endif
         endif
     endfor
-    initialized=1
-    CVA_RestoreFit(graph)
-    switching=0
-    return 0
 End
 
 // A saved fit is current only if its four saved cursor indices still match.
 Function CVA_RestoreFit(graph)
     String graph
-    String df=GetUserData(graph,"","fitDF"),resultName,result,provenance
+    String df=GetUserData(graph,"","fitDF"),resultName
     SVAR/Z sourceFolder=$(df+"source_folder")
     NVAR/Z cycleIndex=$(df+"source_index"),side=$(df+"selected_side"),valid=$(df+"valid")
     if(!SVAR_Exists(sourceFolder) || !NVAR_Exists(cycleIndex) || !NVAR_Exists(side) || !NVAR_Exists(valid))
@@ -1119,6 +1241,21 @@ Function CVA_RestoreFit(graph)
     if(!WaveExists(saved) || !WaveExists(snapshot) || !WaveExists(positions) || !WaveExists(x) || !WaveExists(y) || !WaveExists(lines))
         return 0
     endif
+    if(!CVA_SavedFitMatches(saved,snapshot,positions,x,y,lines,cycleIndex,side))
+        return 0
+    endif
+    Variable xe=saved[0],ye=saved[1],m1=saved[3],b1=saved[4],m2=saved[5],b2=saved[6]
+    Variable a=saved[7],b=saved[8],c=saved[9],d=saved[10]
+    CVA_BuildFitDisplay(df,x,a,b,c,d,m1,b1,m2,b2,xe,ye,note(saved))
+    CVA_ShowFitDisplay(graph,side,xe)
+    valid=1
+    return 0
+End
+
+// A complete finite snapshot and four exact saved cursor positions are required.
+Function CVA_SavedFitMatches(saved,snapshot,positions,x,y,lines,cycleIndex,side)
+    Wave saved,snapshot,positions,x,y,lines
+    Variable cycleIndex,side
     if(numpnts(saved)!=11 || DimSize(snapshot,0)!=numpnts(x) || DimSize(snapshot,1)!=3)
         return 0
     endif
@@ -1138,25 +1275,7 @@ Function CVA_RestoreFit(graph)
             return 0
         endif
     endfor
-    Variable xe=saved[0],ye=saved[1],extrap=saved[2],m1=saved[3],b1=saved[4],m2=saved[5],b2=saved[6]
-    Variable a=saved[7],b=saved[8],c=saved[9],d=saved[10]
-    Make/O/D/N=2 $(df+"lineX"),$(df+"lineAB"),$(df+"lineCD")
-    Make/O/D/N=1 $(df+"intersectionX"),$(df+"intersectionY")
-    Wave lx=$(df+"lineX"),ly1=$(df+"lineAB"),ly2=$(df+"lineCD"),ix=$(df+"intersectionX"),iy=$(df+"intersectionY")
-    lx[0]=min(min(x[a],x[b]),min(min(x[c],x[d]),xe)); lx[1]=max(max(x[a],x[b]),max(max(x[c],x[d]),xe))
-    ly1=m1*lx+b1; ly2=m2*lx+b2; ix[0]=xe; iy[0]=ye
-    provenance=note(saved)
-    Note/K iy
-    Note iy,provenance
-    AppendToGraph/W=$graph ly1 vs lx
-    AppendToGraph/W=$graph ly2 vs lx
-    AppendToGraph/W=$graph iy vs ix
-    ModifyGraph/W=$graph rgb(lineAB)=(8738,8738,8738),rgb(lineCD)=(8738,8738,8738),rgb(intersectionY)=(8738,8738,8738),mode(intersectionY)=3,marker(intersectionY)=19
-    result=CVA_FitLabel(side,xe)
-    TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
-    CVA_PadGraphAxes(graph)
-    valid=1
-    return 0
+    return 1
 End
 
 // Italic voltage symbol, upright subscript and unit.
