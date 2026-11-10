@@ -607,7 +607,8 @@ Function CVA_FitOpen()
     for(i=0;i<numpnts(allCycles);i+=1)
         cycleMenu+=CVA_Ordinal(allCycles[i])+";"
     endfor
-    PopupMenu fitCycle,win=$graph,pos={10,48},size={130,21},title="サイクル",mode=(initialCycle+1),value=cycleMenu,proc=CVA_FitSelect
+    String cycleMenuExpr="\""+cycleMenu+"\""
+    PopupMenu fitCycle,win=$graph,pos={10,48},size={130,21},title="サイクル",mode=(initialCycle+1),value=#cycleMenuExpr,proc=CVA_FitSelect
     PopupMenu fitSide,win=$graph,pos={155,48},size={120,21},title="対象",mode=initialSide,value="酸化側;還元側",proc=CVA_FitSelect
     Button fitGo,win=$graph,pos={285,48},size={150,21},title="計算・保存",proc=CVA_FitButton
     TitleBox fitTableLabel,win=$graph,pos={10,77},frame=0,title="保存済み交点電位 / V（* は外挿）",fSize=11
