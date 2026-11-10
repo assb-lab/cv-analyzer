@@ -813,7 +813,7 @@ Function CVA_FitRun(graph,direction)
     AppendToGraph/W=$graph ly1 vs lx
     AppendToGraph/W=$graph ly2 vs lx
     AppendToGraph/W=$graph iy vs ix
-    ModifyGraph/W=$graph rgb(lineAB)=(65535,0,0),rgb(lineCD)=(0,0,65535),mode(intersectionY)=3,marker(intersectionY)=19
+    ModifyGraph/W=$graph rgb(lineAB)=(0,0,0),rgb(lineCD)=(0,0,0),rgb(intersectionY)=(0,0,0),mode(intersectionY)=3,marker(intersectionY)=19
     result=CVA_FitLabel(direction,xe)
     TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
     valid=1
@@ -1044,7 +1044,7 @@ Function CVA_RestoreFit(graph)
     AppendToGraph/W=$graph ly1 vs lx
     AppendToGraph/W=$graph ly2 vs lx
     AppendToGraph/W=$graph iy vs ix
-    ModifyGraph/W=$graph rgb(lineAB)=(65535,0,0),rgb(lineCD)=(0,0,65535),mode(intersectionY)=3,marker(intersectionY)=19
+    ModifyGraph/W=$graph rgb(lineAB)=(0,0,0),rgb(lineCD)=(0,0,0),rgb(intersectionY)=(0,0,0),mode(intersectionY)=3,marker(intersectionY)=19
     result=CVA_FitLabel(side,xe)
     TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
     valid=1
