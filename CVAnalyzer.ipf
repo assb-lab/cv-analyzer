@@ -500,3 +500,252 @@ Function CVA_IsNumber(token)
     String token
     return GrepString(token, "^[ \t]*[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?[ \t]*$")
 End
+
+// Two-line intersection tool: operates on a copy of one existing cycle trace.
+Menu "Macros"
+    "CV: 2接線交点フィット", CVA_FitOpen()
+End
+
+Function CVA_FitOpen()
+    String sourceGraph=WinName(0,1), traces, selection, sourceDF, fitDF, folder, graph
+    Variable choice=1, n, firstTurn, secondTurn
+    if (strlen(sourceGraph)==0)
+        DoAlert 0, "先に CV グラフを開いてください。"
+        return -1
+    endif
+    traces=TraceNameList(sourceGraph,";",1)
+    traces=GrepList(traces,"^I_cycle_[0-9]+$")
+    if (ItemsInList(traces)==0)
+        DoAlert 0, "CV Analyzer のサイクル波形を含むグラフを選択してください。"
+        return -1
+    endif
+    Prompt choice,"対象サイクル",popup,traces
+    DoPrompt "フィットするサイクルを選択",choice
+    if (V_flag)
+        return 0
+    endif
+    selection=StringFromList(choice-1,traces)
+    Wave/Z sourceI=TraceNameToWaveRef(sourceGraph,selection)
+    if (!WaveExists(sourceI))
+        DoAlert 0, "対象の電流 wave が見つかりません。"
+        return -1
+    endif
+    sourceDF=GetWavesDataFolder(sourceI,1)
+    String suffix=selection[strlen("I_cycle_"),inf]
+    Wave/Z sourceE=$(sourceDF+"E_cycle_"+suffix)
+    Wave/Z sourceLines=$(sourceDF+"source_line")
+    Wave/Z allCycles=$(sourceDF+"summary_cycle")
+    Wave/Z counts=$(sourceDF+"points")
+    SVAR/Z sourceFilename=$(sourceDF+"source_filename")
+    Variable cycleIndex=str2num(suffix)-1,offset=0,i
+    if (!WaveExists(sourceE) || !WaveExists(sourceLines) || !WaveExists(allCycles) || !WaveExists(counts) || !SVAR_Exists(sourceFilename))
+        DoAlert 0, "元の電位・行番号・サイクル情報が見つかりません。"
+        return -1
+    endif
+    n=numpnts(sourceI)
+    if (cycleIndex<0 || cycleIndex>=numpnts(counts) || n<4 || numpnts(sourceE)!=n)
+        DoAlert 0, "フィット対象のデータ点またはサイクル情報が不足しています。"
+        return -1
+    endif
+    for(i=0;i<cycleIndex;i+=1)
+        offset+=counts[i]
+    endfor
+    if (offset+n>numpnts(sourceLines))
+        DoAlert 0, "元ファイルの行番号を対応付けできません。"
+        return -1
+    endif
+    NewDataFolder/O root:Packages
+    NewDataFolder/O root:Packages:CVAFit
+    String oldDF=GetDataFolder(1)
+    SetDataFolder root:Packages:CVAFit
+    folder=UniqueName("fit",11,0)
+    NewDataFolder/S $folder
+    fitDF=GetDataFolder(1)
+    Duplicate/O sourceI,fitI
+    Duplicate/O sourceE,fitE
+    Duplicate/O/R=[offset,offset+n-1] sourceLines,fitLines
+    String/G source_file=sourceFilename
+    Variable/G source_cycle=allCycles[cycleIndex], valid=0
+    Wave fitI,fitE,fitLines
+    CVA_FitTurns(fitE,firstTurn,secondTurn)
+    Variable/G turnA=firstTurn, turnB=secondTurn
+    Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
+    graph=S_name
+    SetWindow $graph,userdata(fitDF)=fitDF
+    ModifyGraph/W=$graph mirror=1,tick=2,gfSize=12
+    Label/W=$graph bottom "\\Z14Cell Voltage \\f02E\\f00\\Bwe\\M\\Z14 / V"
+    Label/W=$graph left "\\Z14Current \\f02I\\f00 / mA"
+    ControlBar/W=$graph 74
+    TitleBox fitHelp,win=$graph,pos={10,7},frame=0,title="A–B と C–D を同じ走査枝に配置し、2 本の直線をフィットします。",fSize=11
+    TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="交点は選択範囲に依存します。カーソル移動後は再計算してください。",fSize=11
+    Button fitGo,win=$graph,pos={10,48},size={180,21},title="2接線の交点を計算",proc=CVA_FitButton
+    ShowInfo/W=$graph/CP={0,1}
+    Cursor/P/W=$graph A,fitI,0
+    Cursor/P/W=$graph B,fitI,floor((n-1)/6)
+    Cursor/P/W=$graph C,fitI,floor((n-1)/3)
+    Cursor/P/W=$graph D,fitI,floor((n-1)/2)
+    SetWindow $graph,hook(CVAFit)=CVA_FitHook
+    SetDataFolder $oldDF
+    return 0
+End
+
+// Cycle extrema delimit the up-to-three contiguous branches of a normal CV.
+Function CVA_FitTurns(x,firstTurn,secondTurn)
+    Wave x
+    Variable &firstTurn,&secondTurn
+    Variable i,imin=0,imax=0
+    for(i=1;i<numpnts(x);i+=1)
+        if(x[i]<x[imin])
+            imin=i
+        endif
+        if(x[i]>x[imax])
+            imax=i
+        endif
+    endfor
+    firstTurn=min(imin,imax)
+    secondTurn=max(imin,imax)
+End
+
+Function CVA_FitBranch(point,firstTurn,secondTurn)
+    Variable point,firstTurn,secondTurn
+    if(point<firstTurn)
+        return 0
+    elseif(point<secondTurn)
+        return 1
+    endif
+    return 2
+End
+
+Function CVA_FitHook(s)
+    STRUCT WMWinHookStruct &s
+    if(s.eventCode==7)
+        CVA_FitInvalidate(s.winName)
+    endif
+    return 0
+End
+
+Function CVA_FitInvalidate(graph)
+    String graph
+    String df=GetUserData(graph,"","fitDF")
+    NVAR/Z valid=$(df+"valid")
+    if(NVAR_Exists(valid))
+        valid=0
+    endif
+    RemoveFromGraph/Z/W=$graph lineAB,lineCD,intersectionY
+    if(WhichListItem("fitResult",AnnotationList(graph))>=0)
+        TextBox/K/W=$graph/N=fitResult
+    endif
+    Wave/Z oldResult=$(df+"intersectionY")
+    if(WaveExists(oldResult))
+        Note/K oldResult
+        oldResult=NaN
+    endif
+End
+
+Function CVA_FitButton(ba) : ButtonControl
+    STRUCT WMButtonAction &ba
+    if(ba.eventCode!=2)
+        return 0
+    endif
+    CVA_FitRun(ba.win)
+    return 0
+End
+
+// Ordinary least squares on acquisition-index interval; centered sums reduce cancellation.
+Function CVA_FitLine(x,y,lo,hi,slope,intercept)
+    Wave x,y
+    Variable lo,hi
+    Variable &slope,&intercept
+    Variable i,n=hi-lo+1,mx=0,my=0,sxx=0,sxy=0,scale=0,dx
+    if(n<3 || lo<0 || hi>=numpnts(x) || hi>=numpnts(y))
+        return -1
+    endif
+    for(i=lo;i<=hi;i+=1)
+        if(numtype(x[i])!=0 || numtype(y[i])!=0)
+            return -1
+        endif
+        mx+=x[i]/n; my+=y[i]/n
+        scale=max(scale,abs(x[i]))
+    endfor
+    for(i=lo;i<=hi;i+=1)
+        dx=x[i]-mx
+        sxx+=dx*dx; sxy+=dx*(y[i]-my)
+    endfor
+    if(numtype(sxx)!=0 || numtype(sxy)!=0 || sxx<=1e-24*max(1,scale*scale)*n)
+        return -1
+    endif
+    slope=sxy/sxx; intercept=my-slope*mx
+    return (numtype(slope)!=0 || numtype(intercept)!=0) ? -1 : 0
+End
+
+Function CVA_FitRun(graph)
+    String graph
+    String df=GetUserData(graph,"","fitDF"), names="A;B;C;D", info, trace, provenance, result
+    Wave/Z x=$(df+"fitE"), y=$(df+"fitI"), lines=$(df+"fitLines")
+    NVAR/Z turnA=$(df+"turnA"),turnB=$(df+"turnB"),valid=$(df+"valid"),cyc=$(df+"source_cycle")
+    SVAR/Z filename=$(df+"source_file")
+    Variable i,pA,pB,pC,pD,a,b,c,d,m1,b1,m2,b2,xe,ye,branch,extrap
+    CVA_FitInvalidate(graph)
+    if(!WaveExists(x) || !WaveExists(y) || !WaveExists(lines) || !NVAR_Exists(turnA) || !NVAR_Exists(turnB) || !NVAR_Exists(valid) || !NVAR_Exists(cyc) || !SVAR_Exists(filename))
+        DoAlert 0,"フィット用データが見つかりません。"
+        return -1
+    endif
+    for(i=0;i<4;i+=1)
+        String cursorName=StringFromList(i,names)
+        info=CsrInfo($cursorName,graph)
+        trace=StringByKey("TNAME",info)
+        if(strlen(info)==0 || cmpstr(trace,"fitI")!=0)
+            DoAlert 0,"カーソル A–D をすべて実測曲線に配置してください。"
+            return -1
+        endif
+    endfor
+    pA=pcsr(A,graph); pB=pcsr(B,graph); pC=pcsr(C,graph); pD=pcsr(D,graph)
+    if(numtype(pA+pB+pC+pD)!=0 || pA!=floor(pA) || pB!=floor(pB) || pC!=floor(pC) || pD!=floor(pD))
+        DoAlert 0,"カーソルをデータ点上に配置してください。"
+        return -1
+    endif
+    a=min(pA,pB); b=max(pA,pB); c=min(pC,pD); d=max(pC,pD)
+    if(a<0 || c<0 || b>=numpnts(x) || d>=numpnts(x))
+        DoAlert 0,"カーソル範囲がデータの外にあります。"
+        return -1
+    endif
+    branch=CVA_FitBranch(a,turnA,turnB)
+    if(CVA_FitBranch(b,turnA,turnB)!=branch || CVA_FitBranch(c,turnA,turnB)!=branch || CVA_FitBranch(d,turnA,turnB)!=branch)
+        DoAlert 0,"2 つの範囲を同じ走査枝に配置してください。折り返し点をまたぐ範囲は使用できません。"
+        return -1
+    endif
+    if(CVA_FitLine(x,y,a,b,m1,b1)!=0 || CVA_FitLine(x,y,c,d,m2,b2)!=0)
+        DoAlert 0,"各範囲に 3 点以上の有効な点と十分な電位幅が必要です。"
+        return -1
+    endif
+    if(abs(m1-m2)<=1e-8*max(1e-12,max(abs(m1),abs(m2))))
+        DoAlert 0,"2 本の傾きが等しいか近すぎるため、交点を求められません。"
+        return -1
+    endif
+    xe=(b2-b1)/(m1-m2); ye=m1*xe+b1
+    if(numtype(xe)!=0 || numtype(ye)!=0)
+        DoAlert 0,"交点の計算に失敗しました。"
+        return -1
+    endif
+    extrap=(xe<min(x[a],x[b]) || xe>max(x[a],x[b]) || xe<min(x[c],x[d]) || xe>max(x[c],x[d]))
+    Make/O/D/N=2 $(df+"lineX"),$(df+"lineAB"),$(df+"lineCD")
+    Make/O/D/N=1 $(df+"intersectionX"),$(df+"intersectionY")
+    Wave lx=$(df+"lineX"),ly1=$(df+"lineAB"),ly2=$(df+"lineCD"),ix=$(df+"intersectionX"),iy=$(df+"intersectionY")
+    lx[0]=min(min(x[a],x[b]),min(min(x[c],x[d]),xe)); lx[1]=max(max(x[a],x[b]),max(max(x[c],x[d]),xe))
+    ly1=m1*lx+b1; ly2=m2*lx+b2; ix[0]=xe; iy[0]=ye
+    sprintf provenance, "AB slope (mA/V): %.17g\rAB intercept (mA): %.17g\rCD slope (mA/V): %.17g\rCD intercept (mA): %.17g\rIntersection E (V): %.17g\rIntersection I (mA): %.17g\r",m1,b1,m2,b2,xe,ye
+    provenance="File: "+filename+"\rCycle: "+num2str(cyc)+"\rA line: "+num2istr(lines[pA])+"\rB line: "+num2istr(lines[pB])+"\rC line: "+num2istr(lines[pC])+"\rD line: "+num2istr(lines[pD])+"\r"+provenance+"Extrapolated: "+num2istr(extrap)+"\r"
+    Note/K iy
+    Note iy,provenance
+    AppendToGraph/W=$graph ly1 vs lx
+    AppendToGraph/W=$graph ly2 vs lx
+    AppendToGraph/W=$graph iy vs ix
+    ModifyGraph/W=$graph rgb(lineAB)=(65535,0,0),rgb(lineCD)=(0,0,65535),mode(intersectionY)=3,marker(intersectionY)=19
+    result="交点: E = "+num2str(xe)+" V, I = "+num2str(ye)+" mA"
+    if(extrap)
+        result+="\r交点は少なくとも一方の範囲外（外挿）です。"
+    endif
+    TextBox/W=$graph/C/N=fitResult/F=0/B=1/A=LT result
+    valid=1
+    return 0
+End
