@@ -600,8 +600,20 @@ Function CVA_FitOpen()
     Cursor/P/W=$graph C,fitI,floor((n-1)/3)
     Cursor/P/W=$graph D,fitI,floor((n-1)/2)
     SetWindow $graph,hook(CVAFit)=CVA_FitHook
+    CVA_PlaceFitBelow(sourceGraph,graph)
     SetDataFolder $oldDF
     return 0
+End
+
+// Align with the selected CV graph, including when the user has moved it.
+Function CVA_PlaceFitBelow(sourceGraph,fitGraph)
+    String sourceGraph,fitGraph
+    DoUpdate
+    GetWindow $sourceGraph wsize
+    Variable left=V_left, top=V_bottom+20
+    GetWindow $fitGraph wsize
+    Variable width=V_right-V_left, height=V_bottom-V_top
+    MoveWindow/W=$fitGraph left,top,left+width,top+height
 End
 
 // Conservative branch check: no reversal of measured potential anywhere
