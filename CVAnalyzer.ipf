@@ -59,7 +59,7 @@ Function CVA_LoadButton(ctrlName) : ButtonControl
         return 0
     endif
     Variable ref
-    Open/D/R/F=".mpt" ref
+    Open/D/R/F="MPT Files (*.mpt):.mpt;" ref
     String path=S_fileName
     if (strlen(path)==0)
         return 0
@@ -72,7 +72,7 @@ End
 Function CVA_Import(path, mode)
     String path
     Variable mode
-    String oldDF=GetDataFolder(1), line, header="", problem="", folder, technique="", filename, baseName
+    String oldDF=GetDataFolder(1), line, header="", problem="", folder, technique="", filename, baseName, headerToken
     Variable dot
     Variable ref, lineNo=0, headerCount=NaN, i, n=0, capacity=4096
     Variable cT=-1,cE=-1,cI=-1,cC=-1,t,e,current,cycle, lastT=-Inf,lastC=-Inf
@@ -96,8 +96,11 @@ Function CVA_Import(path, mode)
         if (strsearch(line,"Nb header lines",0)<0)
             problem="Missing Nb header lines declaration."
         else
-            headerCount=str2num(StringFromList(1,line,":"))
-            if (numtype(headerCount)!=0 || headerCount<3 || headerCount>100000 || headerCount!=floor(headerCount))
+            headerToken=StringFromList(1,line,":")
+            headerToken=ReplaceString("\r",headerToken,"")
+            headerToken=ReplaceString("\n",headerToken,"")
+            headerCount=str2num(headerToken)
+            if (!CVA_IsNumber(headerToken) || numtype(headerCount)!=0 || headerCount<3 || headerCount>100000 || headerCount!=floor(headerCount))
                 problem="Invalid header line count."
             endif
         endif
@@ -130,7 +133,8 @@ Function CVA_Import(path, mode)
     NewDataFolder/O root:CVAnalyzer
     SetDataFolder root:CVAnalyzer
     // Accept both Igor colon paths and POSIX paths.
-    filename=ParseFilePath(0,path,":",1,0)
+    filename=ReplaceString("\\",path,"/")
+    filename=ParseFilePath(0,filename,":",1,0)
     filename=ParseFilePath(0,filename,"/",1,0)
     baseName=filename
     dot=strsearch(LowerStr(baseName),".mpt",0)
@@ -160,6 +164,10 @@ Function CVA_Import(path, mode)
         line=ReplaceString("\n",line,"")
         if (strlen(line)==0)
             continue
+        endif
+        if (!CVA_IsNumber(StringFromList(cT,line,"\t")) || !CVA_IsNumber(StringFromList(cE,line,"\t")) || !CVA_IsNumber(StringFromList(cI,line,"\t")) || !CVA_IsNumber(StringFromList(cC,line,"\t")))
+            problem="Invalid or missing required numeric value at line "+num2str(lineNo)+"."
+            break
         endif
         t=str2num(StringFromList(cT,line,"\t"))
         e=str2num(StringFromList(cE,line,"\t"))
@@ -347,4 +355,10 @@ Function/S CVA_Ordinal(number)
         endif
     endif
     return num2istr(number)+suffix
+End
+
+// Require the entire field to be a decimal number, not a numeric prefix.
+Function CVA_IsNumber(token)
+    String token
+    return GrepString(token, "^[ \t]*[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?[ \t]*$")
 End
