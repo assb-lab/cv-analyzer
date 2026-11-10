@@ -596,8 +596,7 @@ Function CVA_FitOpen()
     Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
     graph=S_name
     SetWindow $graph,userdata(fitDF)=fitDF
-    String fitLegend="\\s(fitI) "+CVA_Ordinal(allCycles[cycleIndex])
-    CVA_StyleGraph(graph,fitLegend)
+    CVA_FitStyle(graph,allCycles[cycleIndex])
     CVA_ColorTrace(graph,"fitI",cycleIndex)
     CVA_PadGraphAxes(graph)
     ControlBar/W=$graph 232
@@ -620,6 +619,15 @@ Function CVA_FitOpen()
     CVA_PlaceFitBelow(sourceGraph,graph)
     SetDataFolder $oldDF
     return 0
+End
+
+// The fitting graph shows the cycle as an annotation, without a trace legend.
+Function CVA_FitStyle(graph,cycle)
+    String graph
+    Variable cycle
+    CVA_GraphAppearance(graph)
+    String label=CVA_Ordinal(cycle)
+    TextBox/W=$graph/C/N=fitCycleLabel/F=0/B=1/A=RB label
 End
 
 // Align with the selected CV graph, including when the user has moved it.
@@ -973,7 +981,7 @@ Function CVA_SwitchFit(graph,nextCycle,nextSide)
     cycleIndex=nextCycle; side=nextSide; cyc=allCycles[nextCycle]
     NVAR lastCycle=$(sourceFolder+"CVA_fit_last_cycle"),lastSide=$(sourceFolder+"CVA_fit_last_side")
     lastCycle=nextCycle; lastSide=nextSide
-    CVA_StyleGraph(graph,"\\s(fitI) "+CVA_Ordinal(cyc))
+    CVA_FitStyle(graph,cyc)
     CVA_ColorTrace(graph,"fitI",nextCycle)
     CVA_PadGraphAxes(graph)
     for(i=0;i<4;i+=1)
