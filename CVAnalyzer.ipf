@@ -1,3 +1,5 @@
+#pragma TextEncoding = "UTF-8"
+#pragma IgorVersion = 8.00
 #pragma rtGlobals=3
 #pragma version=0.102
 // Semantic version: 0.1.2 (Igor pragma uses a numeric version).

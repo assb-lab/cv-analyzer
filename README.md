@@ -27,7 +27,7 @@ BioLogic EC-Lab の通常 CV データ（`.mpt`）を読み込み、サイクル
 ### プロシージャを直接開く
 
 1. Igor Pro の **File → Open File → Procedure** から [CVAnalyzer.ipf](CVAnalyzer.ipf) を開きます。
-2. **Compile** を実行します。
+2. **Compile** を実行します。Igor Pro 8 より前のバージョンでは、`#pragma IgorVersion = 8.00` によりコンパイル時に中止します。
 3. **Macros → CV Analyzer** を選んでパネルを開きます。
 
 ## 通常 CV を読み込む
