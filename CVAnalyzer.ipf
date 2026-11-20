@@ -2,8 +2,8 @@
 #pragma IgorVersion = 8.00
 #pragma rtFunctionErrors=1
 #pragma rtGlobals=3
-#pragma version=0.102
-// Semantic version: 0.1.2 (Igor pragma uses a numeric version).
+#pragma version=0.200
+// Semantic version: 0.2.0 (Igor pragma uses a numeric version).
 
 // BioLogic EC-Lab cyclic voltammetry viewer. Igor Pro 8 or later.
 Menu "Macros"
@@ -21,12 +21,12 @@ Function CVA_OpenPanel()
     NewPanel/N=CVA_Panel/W=(20,50,385,595) as "CV Analyzer"
     TitleBox heading,pos={20,15},size={325,30},frame=0,title="CV Analyzer"
     TitleBox heading,fSize=20,fStyle=1,fColor=(6500,14000,29000)
-    TitleBox version,pos={286,23},frame=0,title="v0.1.2",fSize=11,fColor=(24000,27000,32000)
+    TitleBox version,pos={286,23},frame=0,title="v0.2.0",fSize=11,fColor=(24000,27000,32000)
     TitleBox subtitle,pos={20,48},size={325,20},frame=0,title="BioLogic EC-Lab  •  サイクリックボルタンメトリー"
     TitleBox subtitle,fSize=11,fColor=(24000,27000,32000)
     GroupBox inputGroup,pos={15,78},size={335,130},title="1  測定方法とファイル",fSize=12,fStyle=1
     PopupMenu cvMode,pos={30,110},size={305,22},title="測定方法",proc=CVA_ModeChanged
-    PopupMenu cvMode,fSize=12,mode=1,value="通常 CV：酸化開始;通常 CV：還元開始;酸化側 stepwise（未実装）;還元側 stepwise（未実装）"
+    PopupMenu cvMode,fSize=12,mode=1,value="通常 CV：酸化開始;通常 CV：還元開始;分割 CV：酸化側 → 全域;分割 CV：還元側 → 全域;酸化側 stepwise（未実装）;還元側 stepwise（未実装）"
     TitleBox modeInfo,pos={30,143},size={300,20},frame=0,title="通常 CV：サイクル番号ごとに解析します。"
     TitleBox modeInfo,fSize=11,fColor=(22000,25000,30000)
     Button load,pos={30,172},size={220,25},title="MPT ファイルを選択して解析",proc=CVA_LoadButton
@@ -52,6 +52,8 @@ Function CVA_ModeChanged(ctrlName,popNum,popStr) : PopupMenuControl
     mode=popNum
     if (popNum<=2)
         TitleBox modeInfo,win=CVA_Panel,title="通常 CV：サイクル番号ごとに解析します。"
+    elseif (popNum<=4)
+        TitleBox modeInfo,win=CVA_Panel,title="片側 CV → 全域 CV の順に MPT を選択します。"
     else
         TitleBox modeInfo,win=CVA_Panel,title="stepwise は未実装です。読み込みは行いません。"
     endif
@@ -60,9 +62,12 @@ End
 Function CVA_LoadButton(ctrlName) : ButtonControl
     String ctrlName
     NVAR mode=root:Packages:CVAnalyzer:mode
-    if (mode > 2)
+    if (mode > 4)
         DoAlert 0, "stepwise CV は未実装です。ファイルは読み込まれません。"
         return 0
+    endif
+    if (mode==3 || mode==4)
+        return CVA_LoadSplitFiles(mode)
     endif
     Variable ref
     Open/D/R/F="MPT Files (*.mpt):.mpt;" ref
@@ -116,6 +121,149 @@ Function CVA_Import(path, mode)
     Print "CV Analyzer: imported "+num2str(n)+" rows from "+path+" into "+GetDataFolder(1)
     SetDataFolder $oldDF
     return 0
+End
+
+// Split CV: the one-sided CV technique and the full-window CV technique of a
+// linked EC-Lab sequence are saved as separate MPT files. Select them in order.
+Function CVA_LoadSplitFiles(mode)
+    Variable mode
+    Variable ref
+    String side=SelectString(mode==4,"酸化側","還元側")
+    String filter="MPT Files (*.mpt):.mpt;"
+    Open/D/R/F=filter/M=("1/2  "+side+"の片側 CV（OCV ⇄ 片側の頂点）の MPT を選択") ref
+    String halfPath=S_fileName
+    if (strlen(halfPath)==0)
+        return 0
+    endif
+    DoAlert 2, "続けて全域 CV（2 段目）の MPT を選択しますか？\r「いいえ」を選ぶと片側 CV のみを読み込みます。"
+    if (V_flag==3)
+        return 0
+    endif
+    String fullPath=""
+    if (V_flag==1)
+        Open/D/R/F=filter/M="2/2  全域 CV の MPT を選択" ref
+        fullPath=S_fileName
+        if (strlen(fullPath)==0)
+            return 0
+        endif
+    endif
+    CVA_ImportSplit(halfPath,fullPath,mode)
+    return 0
+End
+
+// Return 0 on success. Mode 3: oxidation side first; mode 4: reduction side
+// first. fullPath may be empty while the full-window step is not yet measured.
+Function CVA_ImportSplit(halfPath,fullPath,mode)
+    String halfPath,fullPath
+    Variable mode
+    String oldDF=GetDataFolder(1),problem="",folder,filename,fullName=""
+    Variable n=0,capacity=4096,halfRows,side=mode-2
+    if (mode!=3 && mode!=4)
+        DoAlert 0, "Only split CV modes are supported."
+        return -1
+    endif
+    if (strlen(fullPath)>0 && cmpstr(halfPath,fullPath)==0)
+        DoAlert 0, "CV import failed: the same file was selected for the half-window and full-window CV."
+        return -1
+    endif
+    folder=CVA_PrepareFolder(halfPath,filename)
+    Make/D/N=(capacity) time_s, Ewe_V, current_mA, cycle_number, source_line
+    problem=CVA_AppendFile(halfPath,n,capacity)
+    if (n<2 && strlen(problem)==0)
+        problem="The file contains fewer than two data rows."
+    endif
+    halfRows=n
+    if (strlen(problem)==0)
+        problem=CVA_CheckHalfWindow(Ewe_V,0,halfRows-1,side)
+    endif
+    if (strlen(problem)>0)
+        problem="Half-window file: "+problem
+    elseif (strlen(fullPath)>0)
+        problem=CVA_AppendFile(fullPath,n,capacity)
+        if (n-halfRows<2 && strlen(problem)==0)
+            problem="The file contains fewer than two data rows."
+        endif
+        if (strlen(problem)>0)
+            problem="Full-window file: "+problem
+        endif
+        fullName=ParseFilePath(0,ParseFilePath(0,ReplaceString("\\",fullPath,"/"),":",1,0),"/",1,0)
+    endif
+    if (strlen(problem)>0)
+        CVA_DiscardImport(folder,oldDF)
+        DoAlert 0, "CV import failed: "+problem
+        return -1
+    endif
+    Redimension/N=(n) time_s,Ewe_V,current_mA,cycle_number,source_line
+    // 1: one-sided (half-window) CV, 2: full-window CV.
+    Make/D/N=(n) segment=(p<halfRows) ? 1 : 2
+    String/G source_file=halfPath, source_filename=filename
+    String/G source_file_full=fullPath, source_filename_full=fullName
+    Variable/G split_side=side
+    String/G measurement_type=SelectString(side==2,"Split CV - oxidation side, then full window","Split CV - reduction side, then full window")
+    if (strlen(fullPath)==0)
+        measurement_type+=" (half-window file only)"
+    endif
+    CVA_SummarizeAndPlot()
+    Print "CV Analyzer: imported "+num2str(halfRows)+" half-window rows from "+halfPath+SelectString(strlen(fullPath)>0,""," and "+num2str(n-halfRows)+" full-window rows from "+fullPath)+" into "+GetDataFolder(1)
+    SetDataFolder $oldDF
+    return 0
+End
+
+// Append one MPT file's rows to the current import folder. Line numbers in
+// errors and in source_line are those of this file.
+Function/S CVA_AppendFile(path,n,capacity)
+    String path
+    Variable &n,&capacity
+    Variable ref,lineNo=0,cT=-1,cE=-1,cI=-1,cC=-1
+    String problem
+    Open/R/Z ref as path
+    if (V_flag != 0)
+        return "Cannot open the selected file."
+    endif
+    problem=CVA_ReadHeader(ref,lineNo,cT,cE,cI,cC)
+    if (strlen(problem)==0)
+        problem=CVA_ReadRows(ref,lineNo,cT,cE,cI,cC,n,capacity)
+    endif
+    Close ref
+    return problem
+End
+
+Constant CVA_kSplitStartThreshold=0.005
+Constant CVA_kSplitOppositeTolerance=0.05
+
+// +1 when the scan first leaves the start potential upward, -1 downward, and
+// 0 when the potential never moves more than the threshold. Inclusive range.
+Function CVA_SplitStartDirection(e,first,last)
+    Wave e
+    Variable first,last
+    Variable i,delta
+    for(i=first+1;i<=last;i+=1)
+        delta=e[i]-e[first]
+        if (abs(delta)>CVA_kSplitStartThreshold)
+            return sign(delta)
+        endif
+    endfor
+    return 0
+End
+
+// The one-sided CV must leave OCV toward the selected side and must not
+// extend beyond its start potential on the other side. This catches the
+// full-window file selected first, or the wrong split mode.
+Function/S CVA_CheckHalfWindow(e,first,last,side)
+    Wave e
+    Variable first,last,side
+    Variable direction=CVA_SplitStartDirection(e,first,last),i,lo=e[first],hi=e[first]
+    String sideName=SelectString(side==2,"oxidation","reduction")
+    if ((side==1 && direction<0) || (side==2 && direction>0))
+        return "the scan starts toward the opposite side of the selected "+sideName+"-side mode."
+    endif
+    for(i=first;i<=last;i+=1)
+        lo=min(lo,e[i]); hi=max(hi,e[i])
+    endfor
+    if ((side==1 && lo<e[first]-CVA_kSplitOppositeTolerance) || (side==2 && hi>e[first]+CVA_kSplitOppositeTolerance))
+        return "the potential goes beyond the start potential on the opposite side; this is not a one-sided "+sideName+" CV. Select the half-window file first."
+    endif
+    return ""
 End
 
 // Read and validate the EC-Lab header. The file remains open at the data rows.
@@ -260,23 +408,29 @@ End
 // Per file cycle: extrema are raw, without baseline subtraction. Charge is
 // trapezoidal integral of positive/negative current versus time in mAh.
 // Intervals spanning different cycle numbers are deliberately excluded.
+// Split CV also starts a new group where the half-window/full-window segment changes.
 Function CVA_SummarizeAndPlot()
     Wave cycle_number
-    SVAR source_filename
-    Variable groups=CVA_CountCycles(cycle_number),j,start=0,finish
+    Wave/Z segment
+    Variable groups=CVA_CountCycles(cycle_number,segment),j,start=0,finish
     CVA_CreateSummaryWaves(groups)
-    String en,iname
-    String legendText="",graphName="",commonNote="File: "+source_filename+"\rCycles and source lines (inclusive, 1-based):\r"
+    if (WaveExists(segment))
+        Make/O/D/N=(groups) summary_segment
+        Make/O/T/N=(groups) summary_label
+    endif
+    String en,iname,label
+    String legendText="",graphName="",commonNote=CVA_SourceNoteHeader()
     for(j=0;j<groups;j+=1)
-        finish=CVA_CycleEnd(cycle_number,start)
+        finish=CVA_CycleEnd(cycle_number,segment,start)
         CVA_SummarizeCycle(j,start,finish)
+        label=CVA_RecordGroupLabel(j,start)
         en="E_cycle_"+num2str(j+1)
         iname="I_cycle_"+num2str(j+1)
         CVA_CreateCycleWaves(start,finish,en,iname)
-        CVA_AppendCycleNotes(start,finish,en,iname,commonNote)
+        CVA_AppendCycleNotes(start,finish,en,iname,label,commonNote)
         CVA_PlotCycle(j,en,iname,graphName)
         CVA_ColorTrace(graphName,iname,j)
-        CVA_AppendCycleLegend(j,iname,cycle_number[start],legendText)
+        CVA_AppendCycleLegend(j,iname,label,legendText)
         start=finish+1
     endfor
     CVA_AnnotateWaves(commonNote)
@@ -290,31 +444,135 @@ Function CVA_CreateSummaryWaves(groups)
     Make/D/N=(groups) summary_cycle, points, E_min_V, E_max_V, I_max_mA, E_at_Imax_V, I_min_mA, E_at_Imin_V, Q_positive_mAh, Q_negative_mAh, duration_s
 End
 
-Function CVA_CountCycles(cycle_number)
+// A null segment wave (normal CV) groups by cycle number alone.
+Function CVA_SameGroup(cycle_number,segment,i,k)
     Wave cycle_number
+    Wave/Z segment
+    Variable i,k
+    if (cycle_number[i]!=cycle_number[k])
+        return 0
+    endif
+    if (!WaveExists(segment))
+        return 1
+    endif
+    return segment[i]==segment[k]
+End
+
+Function CVA_CountCycles(cycle_number,segment)
+    Wave cycle_number
+    Wave/Z segment
     Variable n=numpnts(cycle_number),groups=1,i
     for(i=1;i<n;i+=1)
-        if(cycle_number[i]!=cycle_number[i-1])
+        if(!CVA_SameGroup(cycle_number,segment,i,i-1))
             groups+=1
         endif
     endfor
     return groups
 End
 
-Function CVA_CycleEnd(cycle_number,start)
+Function CVA_CycleEnd(cycle_number,segment,start)
     Wave cycle_number
+    Wave/Z segment
     Variable start
     Variable finish=start,n=numpnts(cycle_number)
     do
         if (finish+1>=n)
             break
         endif
-        if (cycle_number[finish+1]!=cycle_number[start])
+        if (!CVA_SameGroup(cycle_number,segment,finish+1,start))
             break
         endif
         finish+=1
     while(1)
     return finish
+End
+
+// "1st" for normal CV; "Ox-side 1st", "Red-side 1st" or "Full 1st" for split CV.
+// The ordinal is the EC-Lab cycle number in the corresponding file.
+Function/S CVA_SegmentLabel(segmentNo,side,cycle)
+    Variable segmentNo,side,cycle
+    String prefix=""
+    if (segmentNo==1)
+        prefix=SelectString(side==2,"Ox-side ","Red-side ")
+    elseif (segmentNo==2)
+        prefix="Full "
+    endif
+    return prefix+CVA_Ordinal(cycle)
+End
+
+// Record the split segment and label of group j; normal CV keeps its ordinal.
+Function/S CVA_RecordGroupLabel(j,start)
+    Variable j,start
+    Wave cycle_number
+    Wave/Z segment,summary_segment
+    Wave/T/Z summary_label
+    NVAR/Z splitSide=split_side
+    if (!WaveExists(segment) || !WaveExists(summary_segment) || !WaveExists(summary_label) || !NVAR_Exists(splitSide))
+        return CVA_Ordinal(cycle_number[start])
+    endif
+    summary_segment[j]=segment[start]
+    summary_label[j]=CVA_SegmentLabel(segment[start],splitSide,cycle_number[start])
+    return summary_label[j]
+End
+
+// Normal CV keeps the original header; split CV names both source files.
+Function/S CVA_SourceNoteHeader()
+    SVAR source_filename
+    SVAR/Z fullName=source_filename_full
+    Wave/Z segment
+    String header="File: "+source_filename+"\r"
+    if (WaveExists(segment))
+        header="Half-window file: "+source_filename+"\r"
+        if (SVAR_Exists(fullName))
+            if (strlen(fullName)>0)
+                header+="Full-window file: "+fullName+"\r"
+            endif
+        endif
+    endif
+    return header+"Cycles and source lines (inclusive, 1-based):\r"
+End
+
+// Source file of a stored cycle: the full-window file for split segment 2.
+Function/S CVA_CycleSourceFile(sourceDF,cycleIndex)
+    String sourceDF
+    Variable cycleIndex
+    SVAR/Z halfPath=$(sourceDF+"source_file"),fullPath=$(sourceDF+"source_file_full")
+    Wave/Z segments=$(sourceDF+"summary_segment")
+    if (WaveExists(segments) && SVAR_Exists(fullPath) && numtype(cycleIndex)==0)
+        if (cycleIndex>=0 && cycleIndex<numpnts(segments))
+            if (segments[cycleIndex]==2)
+                return fullPath
+            endif
+        endif
+    endif
+    if (SVAR_Exists(halfPath))
+        return halfPath
+    endif
+    return ""
+End
+
+// Legend, menu and annotation label of a stored cycle.
+Function/S CVA_CycleLabelAt(sourceDF,cycleIndex)
+    String sourceDF
+    Variable cycleIndex
+    Wave/T/Z labels=$(sourceDF+"summary_label")
+    Wave/Z cycles=$(sourceDF+"summary_cycle")
+    if (numtype(cycleIndex)!=0 || cycleIndex<0)
+        return ""
+    endif
+    if (WaveExists(labels))
+        if (cycleIndex<numpnts(labels))
+            if (strlen(labels[cycleIndex])>0)
+                return labels[cycleIndex]
+            endif
+        endif
+    endif
+    if (WaveExists(cycles))
+        if (cycleIndex<numpnts(cycles))
+            return CVA_Ordinal(cycles[cycleIndex])
+        endif
+    endif
+    return ""
 End
 
 // Calculate extrema and signed charge within this cycle only.
@@ -385,19 +643,30 @@ Function CVA_CreateCycleWaves(start,finish,en,iname)
 End
 
 // Cycle waves keep their own span; raw and summary waves receive all spans.
-Function CVA_AppendCycleNotes(start,finish,en,iname,commonNote)
+// Split CV notes name the file of the segment and the segment label.
+Function CVA_AppendCycleNotes(start,finish,en,iname,label,commonNote)
     Variable start,finish
-    String en,iname
+    String en,iname,label
     String &commonNote
     Wave cycle_number,source_line
+    Wave/Z segment
     SVAR source_filename
+    SVAR/Z fullName=source_filename_full
     Wave ew=$en, iw=$iname
-    String cycleNote="File: "+source_filename+"\rCycle: "+num2str(cycle_number[start])+"\rStart line: "+num2istr(source_line[start])+"\rEnd line: "+num2istr(source_line[finish])+"\r"
+    String fileName=source_filename,segmentLine="",spanLabel="Cycle "+num2str(cycle_number[start])
+    if (WaveExists(segment))
+        if (segment[start]==2 && SVAR_Exists(fullName))
+            fileName=fullName
+        endif
+        segmentLine="Segment: "+label+"\r"
+        spanLabel=label+" (cycle "+num2str(cycle_number[start])+" of "+fileName+")"
+    endif
+    String cycleNote="File: "+fileName+"\r"+segmentLine+"Cycle: "+num2str(cycle_number[start])+"\rStart line: "+num2istr(source_line[start])+"\rEnd line: "+num2istr(source_line[finish])+"\r"
     Note/K ew
     Note/K iw
     Note ew,cycleNote
     Note iw,cycleNote
-    commonNote+="Cycle "+num2str(cycle_number[start])+": "+num2istr(source_line[start])+" - "+num2istr(source_line[finish])+"\r"
+    commonNote+=spanLabel+": "+num2istr(source_line[start])+" - "+num2istr(source_line[finish])+"\r"
 End
 
 // Create the graph on the first cycle, then append the remaining traces.
@@ -414,14 +683,14 @@ Function CVA_PlotCycle(j,en,iname,graphName)
     endif
 End
 
-Function CVA_AppendCycleLegend(j,iname,cycle,legendText)
-    Variable j,cycle
-    String iname
+Function CVA_AppendCycleLegend(j,iname,label,legendText)
+    Variable j
+    String iname,label
     String &legendText
     if (j>0)
         legendText+="\r"
     endif
-    legendText+="\\s("+iname+") "+CVA_Ordinal(cycle)
+    legendText+="\\s("+iname+") "+label
 End
 
 // First ten colors follow the reference InoColors sequence; repeat after 10.
@@ -443,7 +712,7 @@ Function CVA_AnnotateWaves(commonNote)
     String waveNames,waveName
     Variable k
     // Raw and summary waves cover all cycles; preserve each cycle's line span.
-    waveNames=WaveList("*",";","")
+    waveNames=WaveList("*",";","TEXT:0")
     for (k=0;k<ItemsInList(waveNames);k+=1)
         waveName=StringFromList(k,waveNames)
         if (strsearch(waveName,"E_cycle_",0)==0 || strsearch(waveName,"I_cycle_",0)==0)
@@ -453,6 +722,12 @@ Function CVA_AnnotateWaves(commonNote)
         Note/K noteWave
         Note noteWave,commonNote
     endfor
+    // Text summary labels exist only for split CV.
+    Wave/T/Z labels=summary_label
+    if (WaveExists(labels))
+        Note/K labels
+        Note labels,commonNote
+    endif
 End
 
 Function CVA_GraphAppearance(graphName)
@@ -490,8 +765,13 @@ End
 
 Function CVA_ShowSummary()
     Wave summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s
+    Wave/T/Z labels=summary_label
     String tableName
-    Edit/K=1/W=(20,615,385,855) summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s as "CV cycle summary"
+    if (WaveExists(labels))
+        Edit/K=1/W=(20,615,385,855) labels,summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s as "CV cycle summary"
+    else
+        Edit/K=1/W=(20,615,385,855) summary_cycle,points,E_min_V,E_max_V,I_max_mA,E_at_Imax_V,I_min_mA,E_at_Imin_V,Q_positive_mAh,Q_negative_mAh,duration_s as "CV cycle summary"
+    endif
     tableName=S_name
     ModifyTable/W=$tableName size=12
 End
@@ -690,7 +970,7 @@ Function/S CVA_CreateFitGraph(fitDF,sourceDF,cycleIndex,initialCycle,initialSide
     Display/K=1/W=(405,50,1100,620) fitI vs fitE as "CV 2接線フィット"
     graph=S_name
     SetWindow $graph,userdata(fitDF)=fitDF
-    CVA_FitStyle(graph,allCycles[cycleIndex])
+    CVA_FitStyle(graph,CVA_CycleLabelAt(sourceDF,cycleIndex))
     CVA_ColorTrace(graph,"fitI",cycleIndex)
     CVA_PadGraphAxes(graph)
     CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
@@ -710,7 +990,7 @@ Function CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
     TitleBox fitNote,win=$graph,pos={10,27},frame=0,title="結果は選択範囲に依存します。酸化・還元は手動で選択します。",fSize=11
     String cycleMenu=""
     for(i=0;i<numpnts(allCycles);i+=1)
-        cycleMenu+=CVA_Ordinal(allCycles[i])+";"
+        cycleMenu+=CVA_CycleLabelAt(sourceDF,i)+";"
     endfor
     String cycleMenuExpr="\""+cycleMenu+"\""
     PopupMenu fitCycle,win=$graph,pos={10,48},size={130,21},title="サイクル",mode=(initialCycle+1),value=#cycleMenuExpr,proc=CVA_FitSelect
@@ -718,16 +998,14 @@ Function CVA_FitControls(graph,sourceDF,allCycles,initialCycle,initialSide)
     Button fitGo,win=$graph,pos={285,48},size={150,21},title="計算・保存",proc=CVA_FitButton
     TitleBox fitTableLabel,win=$graph,pos={10,77},frame=0,title="保存済み交点電位 / V（* は外挿）",fSize=11
     Wave/T fitTable=$(sourceDF+"CVA_fit_table"),fitTitles=$(sourceDF+"CVA_fit_titles")
-    ListBox fitTableView,win=$graph,pos={10,98},size={340,120},listWave=fitTable,titleWave=fitTitles,mode=1,fSize=11,widths={75,110,110}
+    ListBox fitTableView,win=$graph,pos={10,98},size={340,120},listWave=fitTable,titleWave=fitTitles,mode=1,fSize=11,widths={95,110,110}
     ShowInfo/W=$graph/CP={0,1}
 End
 
 // The fitting graph shows the cycle as an annotation, without a trace legend.
-Function CVA_FitStyle(graph,cycle)
-    String graph
-    Variable cycle
+Function CVA_FitStyle(graph,label)
+    String graph,label
     CVA_GraphAppearance(graph)
-    String label=CVA_Ordinal(cycle)
     TextBox/W=$graph/C/N=fitCycleLabel/F=0/B=1/A=RB label
 End
 
@@ -937,7 +1215,16 @@ Function CVA_FitRun(graph,direction)
     if(CVA_CalculateFit(x,y,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)!=0)
         return -1
     endif
-    provenance=CVA_FitProvenance(filename,cyc,direction,x,y,lines,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)
+    // Split CV cycles come from either the half-window or the full-window file.
+    String sourcePath=CVA_CycleSourceFile(sourceFolder,cycleIndex)
+    if(strlen(sourcePath)==0)
+        sourcePath=filename
+    endif
+    provenance=CVA_FitProvenance(sourcePath,cyc,direction,x,y,lines,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,extrap)
+    Wave/T/Z labels=$(sourceFolder+"summary_label")
+    if(WaveExists(labels))
+        provenance="Cycle label: "+CVA_CycleLabelAt(sourceFolder,cycleIndex)+"\r"+provenance
+    endif
     CVA_BuildFitDisplay(df,x,pA,pB,pC,pD,m1,b1,m2,b2,xe,ye,provenance)
     if(CVA_SaveFitResult(sourceFolder,cycleIndex,direction,xe,ye,extrap,m1,b1,m2,b2,pA,pB,pC,pD,provenance,x,y,lines)!=0)
         DoAlert 0,"結果表を更新できません。保存済み結果は変更していません。"
@@ -1059,7 +1346,15 @@ Function CVA_InitFitTable(sourceDF,cycles)
         Variable/G $(sourceDF+"CVA_fit_last_cycle")=0
     endif
     if(!NVAR_Exists(lastSide))
-        Variable/G $(sourceDF+"CVA_fit_last_side")=1
+        // Split CV opens on the side measured first; normal CV on oxidation.
+        Variable initialSide=1
+        NVAR/Z splitSide=$(sourceDF+"split_side")
+        if(NVAR_Exists(splitSide))
+            if(splitSide==2)
+                initialSide=2
+            endif
+        endif
+        Variable/G $(sourceDF+"CVA_fit_last_side")=initialSide
     endif
     Wave/Z cursors=$(sourceDF+"CVA_fit_cursors")
     if(!CVA_ExistingCursorTableValid(cursors,numpnts(cycles)))
@@ -1080,10 +1375,15 @@ Function CVA_InitFitTable(sourceDF,cycles)
         Make/D/N=(numpnts(cycles),2,4) $(sourceDF+"CVA_fit_cursors")=NaN
     endif
     Wave/T table=$(sourceDF+"CVA_fit_table"),titles=$(sourceDF+"CVA_fit_titles")
+    Wave/T/Z labels=$(sourceDF+"summary_label")
     titles[0]="Cycle"; titles[1]="酸化 / V"; titles[2]="還元 / V"
     Variable i
     for(i=0;i<numpnts(cycles);i+=1)
+        // Split CV rows repeat cycle numbers per file, so show the segment label.
         table[i][0]=num2str(cycles[i])
+        if(WaveExists(labels))
+            table[i][0]=CVA_CycleLabelAt(sourceDF,i)
+        endif
         table[i][1]="—"; table[i][2]="—"
     endfor
     return 0
@@ -1226,7 +1526,7 @@ Function CVA_SwitchFit(graph,nextCycle,nextSide)
     cycleIndex=nextCycle; side=nextSide; cyc=allCycles[nextCycle]
     NVAR lastCycle=$(sourceFolder+"CVA_fit_last_cycle"),lastSide=$(sourceFolder+"CVA_fit_last_side")
     lastCycle=nextCycle; lastSide=nextSide
-    CVA_FitStyle(graph,cyc)
+    CVA_FitStyle(graph,CVA_CycleLabelAt(sourceFolder,nextCycle))
     CVA_ColorTrace(graph,"fitI",nextCycle)
     CVA_PadGraphAxes(graph)
     CVA_RestoreFitCursors(graph,positions,nextCycle,nextSide,n)
