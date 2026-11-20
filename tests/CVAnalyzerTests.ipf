@@ -1,7 +1,9 @@
 #pragma rtGlobals=3
 
 // Load this procedure together with CVAnalyzer.ipf in a disposable Igor Pro 8
-// experiment, compile, and run CVAT_Run(). No imported/user waves are modified.
+// experiment, compile, and run CVAT_Run(). No imported/user waves are modified;
+// the split-import check writes two temporary MPT files and removes its own
+// root:CVAnalyzer folder, windows and files afterwards.
 // These are native Igor tests; merely reading this file is not an execution pass.
 Function CVAT_Assert(condition,message)
     Variable condition
@@ -21,6 +23,8 @@ Function CVAT_Run()
     CVAT_Math()
     CVAT_CrossBranch()
     CVAT_DataRows()
+    CVAT_Split()
+    CVAT_SplitImport()
     CVAT_Charge(testDF)
     CVAT_State(testDF)
     CVAT_Editor(testDF)
@@ -45,6 +49,99 @@ Function CVAT_DataRows()
     CVAT_Assert(cmpstr(problem,"Time or cycle number is out of order at line 17.")==0,"decreasing cycle rejected")
     problem=CVA_ParseDataRow("2\t0.5\t-2\t3.5",18,0,1,2,3,1,3,t,e,current,cycle)
     CVAT_Assert(cmpstr(problem,"Time or cycle number is out of order at line 18.")==0,"fractional cycle rejected")
+End
+
+// Split CV: grouping by segment, labels and one-sided window checks.
+Function CVAT_Split()
+    Make/FREE/D cycles={1,1,2,2,2,2,3,3}
+    Make/FREE/D segments={1,1,1,1,2,2,2,2}
+    Wave/Z none=$""
+    CVAT_Assert(CVA_CountCycles(cycles,none)==3,"normal CV groups by cycle number only")
+    CVAT_Assert(CVA_CountCycles(cycles,segments)==4,"segment change splits a repeated cycle number")
+    CVAT_Assert(CVA_CycleEnd(cycles,segments,2)==3 && CVA_CycleEnd(cycles,none,2)==5,"group end respects segment")
+    CVAT_Assert(cmpstr(CVA_SegmentLabel(1,1,1),"Ox-side 1st")==0 && cmpstr(CVA_SegmentLabel(1,2,3),"Red-side 3rd")==0,"half-window labels")
+    CVAT_Assert(cmpstr(CVA_SegmentLabel(2,2,2),"Full 2nd")==0 && cmpstr(CVA_SegmentLabel(0,1,11),"11th")==0,"full-window and plain labels")
+    Make/FREE/D e={2,2.001,2.003,2.01,2.2,2.0}
+    CVAT_Assert(CVA_SplitStartDirection(e,0,5)==1,"upward start detected past threshold")
+    e={2,1.999,1.99,1.8,2.0,2.0}
+    CVAT_Assert(CVA_SplitStartDirection(e,0,5)==-1,"downward start detected")
+    e={2,2.001,1.999,2.002,2.0,2.0}
+    CVAT_Assert(CVA_SplitStartDirection(e,0,5)==0,"start within threshold is undetermined")
+    Make/FREE/D ox={2,2.2,2.4,2.2,2.0,1.98}
+    CVAT_Assert(strlen(CVA_CheckHalfWindow(ox,0,5,1))==0,"oxidation half window accepted with small return overshoot")
+    CVAT_Assert(strlen(CVA_CheckHalfWindow(ox,0,5,2))>0,"oxidation half window rejected in reduction mode")
+    Make/FREE/D full={2,2.2,2.4,2.2,2.0,1.6}
+    CVAT_Assert(strlen(CVA_CheckHalfWindow(full,0,5,1))>0,"full window rejected as oxidation half window")
+    Make/FREE/D red={2,1.5,1.0,1.5,2.0,2.02}
+    CVAT_Assert(strlen(CVA_CheckHalfWindow(red,0,5,2))==0,"reduction half window accepted")
+    CVAT_Assert(strlen(CVA_CheckHalfWindow(red,0,5,1))>0,"reduction half window rejected in oxidation mode")
+End
+
+Function CVAT_WriteMPT(path,rows)
+    String path,rows
+    Variable ref,i
+    Open ref as path
+    fprintf ref,"EC-Lab ASCII FILE\nNb header lines : 5\n\nCyclic Voltammetry\ntime/s\tEwe/V\t<I>/mA\tcycle number\n"
+    for(i=0;i<ItemsInList(rows);i+=1)
+        fprintf ref,"%s\n",StringFromList(i,rows)
+    endfor
+    Close ref
+End
+
+// End-to-end split import. The full-window file deliberately continues the
+// cycle counter (2) so the segment boundary alone must separate the groups.
+Function CVAT_SplitImport()
+    String oldDF=GetDataFolder(1),dir=SpecialDirPath("Temporary",0,0,0)
+    String halfPath=dir+"CVATSplitHalf.mpt",fullPath=dir+"CVATSplitFull.mpt"
+    String half="0\t2.0\t0.01\t1;10\t2.1\t0.02\t1;20\t2.2\t0.03\t1;30\t2.1\t-0.01\t1;40\t2.0\t-0.02\t1;50\t2.1\t0.02\t2;60\t2.2\t0.03\t2;70\t2.1\t-0.01\t2;80\t2.0\t-0.02\t2"
+    String full="90\t2.0\t0.01\t2;100\t2.2\t0.02\t2;110\t2.4\t0.05\t2;120\t2.2\t-0.01\t2;130\t2.0\t-0.02\t2;140\t1.8\t-0.05\t3;150\t1.6\t-0.08\t3;160\t1.8\t-0.03\t3;170\t2.0\t0.01\t3"
+    CVAT_WriteMPT(halfPath,half)
+    CVAT_WriteMPT(fullPath,full)
+    Variable createdRoot=!DataFolderExists("root:CVAnalyzer")
+    NewDataFolder/O root:CVAnalyzer
+    SetDataFolder root:CVAnalyzer
+    String folder="root:CVAnalyzer:"+UniqueName("CVATSplitHalf",11,0)+":"
+    SetDataFolder $oldDF
+    String windowsBefore=WinList("*",";","WIN:3")
+    CVAT_Assert(CVA_ImportSplit(halfPath,fullPath,3)==0,"split import succeeds")
+    CVAT_Assert(cmpstr(GetDataFolder(1),oldDF)==0,"split import restores current data folder")
+    String windowsAfter=WinList("*",";","WIN:3"),win
+    Variable i
+    for(i=0;i<ItemsInList(windowsAfter);i+=1)
+        win=StringFromList(i,windowsAfter)
+        if(WhichListItem(win,windowsBefore)<0)
+            DoWindow/K $win
+        endif
+    endfor
+    Wave/T labels=$(folder+"summary_label")
+    Wave segments=$(folder+"summary_segment"),points=$(folder+"points"),cycles=$(folder+"summary_cycle"),lines=$(folder+"source_line")
+    CVAT_Assert(numpnts(labels)==4 && numpnts(points)==4,"four groups across two files")
+    CVAT_Assert(cmpstr(labels[0],"Ox-side 1st")==0 && cmpstr(labels[1],"Ox-side 2nd")==0 && cmpstr(labels[2],"Full 2nd")==0 && cmpstr(labels[3],"Full 3rd")==0,"split labels")
+    CVAT_Assert(segments[1]==1 && segments[2]==2 && cycles[1]==2 && cycles[2]==2,"repeated cycle number separated by segment")
+    CVAT_Assert(points[0]==5 && points[1]==4 && points[2]==5 && points[3]==4,"group point counts")
+    CVAT_Assert(lines[0]==6 && lines[9]==6 && lines[17]==14,"source lines restart for the second file")
+    Wave e3=$(folder+"E_cycle_3")
+    CVAT_Assert(strsearch(note(e3),"File: CVATSplitFull.mpt\r",0)>=0 && strsearch(note(e3),"Segment: Full 2nd\r",0)>=0,"full-window cycle note names its file")
+    CVAT_Assert(cmpstr(CVA_CycleSourceFile(folder,2),fullPath)==0 && cmpstr(CVA_CycleSourceFile(folder,1),halfPath)==0,"cycle source file follows segment")
+    CVAT_Assert(cmpstr(CVA_CycleLabelAt(folder,3),"Full 3rd")==0,"cycle label lookup")
+    CVAT_Assert(CVA_InitFitTable(folder,cycles)==0,"split fit table initialized")
+    Wave/T table=$(folder+"CVA_fit_table")
+    NVAR lastSide=$(folder+"CVA_fit_last_side")
+    CVAT_Assert(cmpstr(table[2][0],"Full 2nd")==0 && lastSide==1,"fit table labels and oxidation-first side")
+    NVAR splitSide=$(folder+"split_side")
+    splitSide=2
+    KillVariables/Z $(folder+"CVA_fit_last_side")
+    CVAT_Assert(CVA_InitFitTable(folder,cycles)==0,"split fit table re-initialized")
+    NVAR reducedSide=$(folder+"CVA_fit_last_side")
+    CVAT_Assert(reducedSide==2 && cmpstr(CVA_SegmentLabel(1,splitSide,1),"Red-side 1st")==0,"reduction-first side selected initially")
+    SVAR kind=$(folder+"measurement_type")
+    CVAT_Assert(strsearch(kind,"oxidation side",0)>=0,"measurement type records the split side")
+    KillDataFolder $folder
+    if(createdRoot)
+        KillDataFolder root:CVAnalyzer
+    endif
+    DeleteFile/Z halfPath
+    DeleteFile/Z fullPath
 End
 
 Function CVAT_Charge(testDF)
