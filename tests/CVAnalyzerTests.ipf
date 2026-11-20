@@ -1,5 +1,6 @@
 #pragma TextEncoding = "UTF-8"
 #pragma IgorVersion = 8.00
+#pragma rtFunctionErrors=1
 #pragma rtGlobals=3
 
 // Load this procedure together with CVAnalyzer.ipf in a disposable Igor Pro 8
